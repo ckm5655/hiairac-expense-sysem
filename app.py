@@ -9,7 +9,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 app.secret_key = "trip_unified_advanced_system_2026"
-
+ 
 USER_CREDENTIALS = {
     "admin": {"password": "1234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
