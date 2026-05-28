@@ -24,7 +24,6 @@ ACCOUNT_MAPPING = {
     "소모품비": "530", "택배비": "524", "수수료": "531", "숙박비": "512", "기타": "533"
 }
 
-# 💾 Render에서 데이터가 날아가지 않도록 파일 기반 저장 구조 추가
 DATA_FILE = "expenses.json"
 
 def load_data():
@@ -44,7 +43,6 @@ def save_data():
     except Exception as e:
         print("데이터 저장 실패:", e)
 
-# 최초 서버 구동 시 기존 데이터 로드
 ALL_EXPENSES = load_data()
 
 @app.route('/')
@@ -75,7 +73,8 @@ def index_page():
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
     user_team = session['team']
     
-    categories = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
+    # 💡 에러 방지를 위해 카테고리 리스트를 명확하게 선언
+    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
     
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
     if user_team != "관리자":
@@ -131,11 +130,12 @@ def index_page():
             'amount': x['amount']
         })
         
+    # 📌 render_template 인자값으로 categories 가 확실하게 매핑되도록 처리
     return render_template('index.html', 
                            username=session['username'], 
                            team=user_team,
                            current_month=current_month,
-                           categories=categories,
+                           categories=categories_list,
                            trips=trips_list,
                            dashboard_stats=dashboard_stats,
                            raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
@@ -181,7 +181,7 @@ def add_expense():
         }
         ALL_EXPENSES.append(new_item)
     
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/edit', methods=['POST'])
@@ -215,7 +215,7 @@ def edit_expense():
                 x['category'] = sub_map[sid]['category']
                 x['amount'] = sub_map[sid]['amount']
                 
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/delete/<trip_id>')
@@ -226,7 +226,7 @@ def delete_expense(trip_id):
     
     ALL_EXPENSES = [x for x in ALL_EXPENSES if x['trip_id'] != trip_id]
     
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/reorder', methods=['POST'])
@@ -243,7 +243,7 @@ def reorder_expenses():
         if tid in order_map:
             x['order'] = order_map[tid]
             
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/download/cover')
@@ -260,7 +260,6 @@ def download_cover():
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "정산서 표지"
-    
     ws1.views.sheetView[0].showGridLines = True
     
     font_title = Font(name='맑은 고딕', size=16, bold=True)
@@ -416,6 +415,5 @@ def download_cover():
     return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if __name__ == '__main__':
-    # 🌐 Render의 동적 포트 바인딩 설정 반영
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
