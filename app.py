@@ -131,7 +131,7 @@ def index_page():
         })
         
     # 📌 render_template 인자값으로 categories 가 확실하게 매핑되도록 처리
-    return render_template('index.html', 
+  return render_template('index.html', 
                            username=session['username'], 
                            team=user_team,
                            current_month=current_month,
@@ -139,7 +139,7 @@ def index_page():
                            trips=trips_list,
                            dashboard_stats=dashboard_stats,
                            raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
-
+                          
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
     if 'user_id' not in session: return redirect(url_for('login_page'))
