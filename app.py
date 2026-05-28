@@ -75,8 +75,9 @@ def index_page():
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
     user_team = session['team']
     
-    categories = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
+    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
     
+    # 1. 이번 달 기준 팀별/개인별 정산 목록 필터링
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
     if user_team != "관리자":
         month_data = [x for x in month_data if x.get('team') == user_team]
@@ -111,6 +112,7 @@ def index_page():
     for t in trips_list:
         t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
         
+    # 2. 대시보드 상단 미니 통계 (선택한 '당월' 전체 부서 기준 합계)
     dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0}
     all_month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
     for x in all_month_data:
@@ -121,21 +123,40 @@ def index_page():
         elif "영업" in t_name: dashboard_stats["영업팀"] += x['amount']
         elif "전장" in t_name: dashboard_stats["전장팀"] += x['amount']
         
+    # 3. 📊 [여기서 수정!] 그래프용 최근 6개월 범위 데이터 수집
+    # 조회된 월(current_month: 예 '2026-05')을 기준으로 과거 5개월 전 시작월 계산
+    try:
+        base_date = datetime.datetime.strptime(current_month, "%Y-%m")
+    except:
+        base_date = datetime.datetime.today()
+
+    # 안전하게 연도와 월을 역산하여 5개월 전의 'YYYY-MM' 문자열 획득
+    start_year = base_date.year
+    start_month_num = base_date.month - 5
+    while start_month_num <= 0:
+        start_month_num += 12
+        start_year -= 1
+    start_month_str = f"{start_year}-{start_month_num:02d}"
+    end_month_str = current_month
+
     raw_stats = []
-    for x in all_month_data:
-        raw_stats.append({
-            'team': x['team'],
-            'date': x['date'],
-            'place': x['place'],
-            'category': x['category'],
-            'amount': x['amount']
-        })
+    for x in ALL_EXPENSES:
+        data_month = x.get('date', '')[:7]
+        # 계산된 최근 6개월 범위 내에 있는 데이터만 전부 담아서 프론트로 전달
+        if start_month_str <= data_month <= end_month_str:
+            raw_stats.append({
+                'team': x['team'],
+                'date': x['date'],
+                'place': x['place'],
+                'category': x['category'],
+                'amount': x['amount']
+            })
         
     return render_template('index.html', 
                            username=session['username'], 
                            team=user_team,
                            current_month=current_month,
-                           categories=categories,
+                           categories=categories_list,
                            trips=trips_list,
                            dashboard_stats=dashboard_stats,
                            raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
