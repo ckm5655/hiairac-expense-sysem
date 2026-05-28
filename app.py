@@ -22,7 +22,7 @@ app = Flask(__name__)
 app.secret_key = "trip_unified_advanced_system_2026"
 
 USER_CREDENTIALS = {
-    "admin": {"password": "1234", "name": "관리자", "team": "관리자"},
+    "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
     "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
     "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
