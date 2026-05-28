@@ -445,6 +445,32 @@ def download_cover():
     filename = f"출장정산_{target_team}_{target_month}.xlsx"
     return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# 기존 코드에 아래 라우트(경로)들을 추가하시면 됩니다.
+
+@app.route('/backup/download')
+def backup_download():
+    # 현재 서버에 있는 expenses.json을 내 컴퓨터로 다운로드
+    if os.path.exists(DATA_FILE):
+        return send_file(DATA_FILE, as_attachment=True, download_name="expenses_backup.json")
+    return "백업 파일이 없습니다.", 404
+
+@app.route('/backup/upload', methods=['POST'])
+def backup_upload():
+    if 'file' not in request.files:
+        return "파일이 없습니다."
+    file = request.files['file']
+    if file.filename == '':
+        return "파일을 선택해주세요."
+    
+    # 업로드한 파일을 서버의 expenses.json으로 덮어쓰기
+    file.save(DATA_FILE)
+    
+    # 서버 메모리의 ALL_EXPENSES도 새로고침
+    global ALL_EXPENSES
+    ALL_EXPENSES = load_data()
+    
+    return "<script>alert('데이터 복구가 완료되었습니다!'); location.href='/index';</script>"
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
