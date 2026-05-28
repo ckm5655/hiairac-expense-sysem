@@ -286,166 +286,123 @@ def download_cover():
         target_team += "팀"
         
     team_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
-    team_data.sort(key=lambda x: (x.get('order', 999), x.get('date', '')))
+    # 날짜와 순번 기준으로 정렬
+    team_data.sort(key=lambda x: (x.get('date', ''), x.get('order', 999)))
     
     wb = openpyxl.Workbook()
-    ws1 = wb.active
-    ws1.title = "정산서 표지"
-    ws1.views.sheetView[0].showGridLines = True
+    ws = wb.active
+    ws.title = f"{target_month[5:7]}월 정산서"
     
-    font_title = Font(name='맑은 고딕', size=16, bold=True)
-    font_main = Font(name='맑은 고딕', size=10, bold=False)
-    font_bold = Font(name='맑은 고딕', size=11, bold=True)
-    
-    thin_border = Border(
-        left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'),
-        top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000')
-    )
-    double_bottom_border = Border(
-        left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'),
-        top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000')
-    )
-    
-    fill_gray = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
-    fill_accent = PatternFill(start_color='E2EFDA', end_color='E2EFDA', fill_type='solid')
-    
-    ws1.merge_cells('A1:H2')
-    title_cell = ws1['A1']
-    title_cell.value = f"출 장 경 비 정 산 서 ({target_team})"
+    # 기본 스타일 설정
+    font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
+    font_header = Font(name='맑은 고딕', size=10, bold=True)
+    font_main = Font(name='맑은 고딕', size=9)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid') # 연한 회색
+    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid') # 연한 파랑
+    align_center = Alignment(horizontal='center', vertical='center')
+    align_right = Alignment(horizontal='right', vertical='center')
+    align_left = Alignment(horizontal='left', vertical='center')
+
+    # 1. 제목 (좌측 상단)
+    ws.merge_cells('A1:D2')
+    title_cell = ws['A1']
+    title_cell.value = f"{target_month[5:7]}월 개인경비 사용내역"
     title_cell.font = font_title
-    title_cell.alignment = Alignment(horizontal='center', vertical='center')
-    
-    headers = ["순번", "결재", "출장지", "기간 및 일수", "출장 목적 및 대표 내용", "교통비/주차비", "식대비", "합계 금액"]
+    title_cell.alignment = Alignment(horizontal='left', vertical='center')
+
+    # 2. 결재란 (우측 상단)
+    approve_headers = ["작성", "검토", "검토", "승인"]
+    for i, h in enumerate(approve_headers):
+        col_idx = 9 + i # I열부터 시작
+        # 헤더
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
+        # 서명칸
+        sign_cell = ws.cell(row=2, column=col_idx)
+        sign_cell.border = thin_border
+    ws.row_dimensions[2].height = 40 # 서명란 높이
+
+    # 3. 작성 정보
+    today_str = datetime.date.today().strftime('%y년 %m월 %d일')
+    ws.merge_cells('A4:D4')
+    info_cell = ws['A4']
+    info_cell.value = f"작성일자: {today_str}  /  부서: {target_team}"
+    info_cell.font = font_main
+
+    # 4. 메인 테이블 헤더 (보내주신 두 번째 이미지 형식)
+    headers = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "소모품비", "차량유지비", "기타", "사용자"]
     for col_idx, h in enumerate(headers, 1):
-        cell = ws1.cell(row=4, column=col_idx, value=h)
-        cell.font = font_bold; cell.alignment = Alignment(horizontal='center', vertical='center')
-        cell.border = thin_border; cell.fill = fill_gray
-    ws1.row_dimensions[4].height = 28
-    
-    trips_map = {}
-    for exp in team_data:
-        tid = exp['trip_id']
-        if tid not in trips_map:
-            trips_map[tid] = {
-                'order': exp.get('order', 1),
-                'date': exp['date'],
-                'place': exp['place'],
-                'content': exp['content'],
-                'trans_park': 0,
-                'food': 0,
-                'total': 0
-            }
+        cell = ws.cell(row=5, column=col_idx, value=h)
+        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+    ws.row_dimensions[5].height = 25
+
+    # 5. 데이터 입력
+    r_idx = 6
+    for idx, exp in enumerate(team_data, 1):
+        ws.cell(row=r_idx, column=1, value=idx).border = thin_border # 순번
+        ws.cell(row=r_idx, column=2, value=exp['date'][5:]).border = thin_border # 일자 (MM-DD)
+        ws.cell(row=r_idx, column=3, value=exp['content']).border = thin_border # 내용
+        ws.cell(row=r_idx, column=4, value=exp['place']).border = thin_border # 출장지
+        
+        # 금액 분류 로직
         amt = exp['amount']
         cat = exp['category']
-        if cat in ["교통비", "주차비", "차량유지비"]:
-            trips_map[tid]['trans_park'] += amt
-        elif cat in ["식비", "식대비"]:
-            trips_map[tid]['food'] += amt
-        else:
-            trips_map[tid]['food'] += amt
-        trips_map[tid]['total'] += amt
         
-    sorted_trips = list(trips_map.values())
-    sorted_trips.sort(key=lambda x: x['order'])
-    
-    r_idx = 5
-    for idx, t in enumerate(sorted_trips, 1):
-        ws1.cell(row=r_idx, column=1, value=idx).alignment = Alignment(horizontal='center')
-        ws1.cell(row=r_idx, column=2, value="").alignment = Alignment(horizontal='center')
-        ws1.cell(row=r_idx, column=3, value=t['place']).alignment = Alignment(horizontal='center')
+        # 합계금액 (E열)
+        total_cell = ws.cell(row=r_idx, column=5, value=amt)
+        total_cell.font = Font(bold=True); total_cell.number_format = '#,##0'
         
-        try:
-            dt = datetime.datetime.strptime(t['date'], "%Y-%m-%d")
-            date_str = dt.strftime("%m/%d")
-        except:
-            date_str = t['date']
+        # 각 항목별 열 배정 (F~K)
+        # 6:교통비, 7:식대비, 8:숙박비, 9:소모품비, 10:차량유지비, 11:기타
+        col_map = {"교통비": 6, "주차비": 6, "식비": 7, "식대비": 7, "숙박비": 8, "소모품비": 9, "차량유지비": 10}
+        target_col = col_map.get(cat, 11)
+        
+        for c in range(5, 12): # 모든 금액 컬럼 초기화 및 테두리
+            v_cell = ws.cell(row=r_idx, column=c)
+            v_cell.border = thin_border; v_cell.alignment = align_right
+            if c == target_col: v_cell.value = amt
+            v_cell.number_format = '#,##0'
             
-        ws1.cell(row=r_idx, column=4, value=date_str).alignment = Alignment(horizontal='center')
-        ws1.cell(row=r_idx, column=5, value=t['content']).alignment = Alignment(horizontal='left')
+        ws.cell(row=r_idx, column=12, value=exp['user_name']).border = thin_border # 사용자
         
-        c6 = ws1.cell(row=r_idx, column=6, value=t['trans_park'])
-        c6.number_format = '#,##0'; c6.alignment = Alignment(horizontal='right')
-        
-        c7 = ws1.cell(row=r_idx, column=7, value=t['food'])
-        c7.number_format = '#,##0'; c7.alignment = Alignment(horizontal='right')
-        
-        c8 = ws1.cell(row=r_idx, column=8, value=f"=SUM(F{r_idx}:G{r_idx})")
-        c8.number_format = '#,##0'; c8.alignment = Alignment(horizontal='right'); c8.font = font_bold
-        
-        for c in range(1, 9):
-            ws1.cell(row=r_idx, column=c).font = font_main if c != 8 else font_bold
-            ws1.cell(row=r_idx, column=c).border = thin_border
+        for c in range(1, 5): ws.cell(row=r_idx, column=c).alignment = align_center
+        ws.cell(row=r_idx, column=3).alignment = align_left # 내용은 좌측정렬
         r_idx += 1
-        
-    ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=5)
-    sum_label = ws1.cell(row=r_idx, column=1, value="합   계")
-    sum_label.font = font_bold; sum_label.alignment = Alignment(horizontal='center')
+
+    # 6. 합계행 (Footer)
+    ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=4)
+    footer_label = ws.cell(row=r_idx, column=1, value="합   계")
+    footer_label.font = font_header; footer_label.alignment = align_center; footer_label.border = thin_border; footer_label.fill = fill_sum
     
-    sf = ws1.cell(row=r_idx, column=6, value=f"=SUM(F5:F{r_idx-1})")
-    sf.number_format = '#,##0'; sf.alignment = Alignment(horizontal='right'); sf.font = font_bold
-    
-    sg = ws1.cell(row=r_idx, column=7, value=f"=SUM(G5:G{r_idx-1})")
-    sg.number_format = '#,##0'; sg.alignment = Alignment(horizontal='right'); sg.font = font_bold
-    
-    sh = ws1.cell(row=r_idx, column=8, value=f"=SUM(H5:H{r_idx-1})")
-    sh.number_format = '#,##0'; sh.alignment = Alignment(horizontal='right'); sh.font = font_bold; sh.fill = fill_accent
-    
-    for c in range(1, 9):
-        ws1.cell(row=r_idx, column=c).border = double_bottom_border
-        if c >= 6: ws1.cell(row=r_idx, column=c).font = font_bold
-        
-    col_widths1 = [6, 8, 18, 14, 35, 15, 15, 18]
-    for i, w in enumerate(col_widths1, 1):
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-        
-    ws2 = wb.create_sheet(title="ERP 변환용")
-    ws2.views.sheetView[0].showGridLines = True
-    
-    headers2 = ["신청부서", "일자", "상세내역", "출장지 명칭", "원래구분", "지출금액", "사용자명", "계정코드"]
-    for col_idx, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=5, column=col_idx, value=h)
-        cell.font = font_bold; cell.alignment = Alignment(horizontal='center', vertical='center')
-        cell.border = thin_border; cell.fill = fill_gray
-    ws2.row_dimensions[5].height = 24
-    
-    r_idx2 = 6
-    for exp in team_data:
-        ws2.cell(row=r_idx2, column=1, value=exp['team']).alignment = Alignment(horizontal='center')
-        ws2.cell(row=r_idx2, column=2, value=exp['date']).alignment = Alignment(horizontal='center')
-        ws2.cell(row=r_idx2, column=3, value=exp['content']).alignment = Alignment(horizontal='left')
-        ws2.cell(row=r_idx2, column=4, value=exp['place']).alignment = Alignment(horizontal='center')
-        ws2.cell(row=r_idx2, column=5, value=exp['category']).alignment = Alignment(horizontal='center')
-        
-        amt_cell = ws2.cell(row=r_idx2, column=6, value=exp['amount'])
-        amt_cell.alignment = Alignment(horizontal='right'); amt_cell.number_format = '#,##0'
-        
-        ws2.cell(row=r_idx2, column=7, value=exp['user_name']).alignment = Alignment(horizontal='center')
-        
-        ac_code = ACCOUNT_MAPPING.get(exp['category'], "533")
-        ws2.cell(row=r_idx2, column=8, value=ac_code).alignment = Alignment(horizontal='center')
-        
-        for c in range(1, 9):
-            ws2.cell(row=r_idx2, column=c).font = font_main; ws2.cell(row=r_idx2, column=c).border = thin_border
-        r_idx2 += 1
-        
-    if r_idx2 > 6:
-        ws2.cell(row=r_idx2, column=3, value="총 합계").font = font_bold; ws2.cell(row=r_idx2, column=3).alignment = Alignment(horizontal='center')
-        sum_cell = ws2.cell(row=r_idx2, column=6, value=f"=SUM(F6:F{r_idx2-1})")
-        sum_cell.font = font_bold; sum_cell.alignment = Alignment(horizontal='right'); sum_cell.number_format = '#,##0'; sum_cell.fill = fill_accent
-        ws2.cell(row=r_idx2, column=6).border = double_bottom_border
-        
-    col_widths2 = [12, 14, 35, 18, 14, 15, 12, 10]
-    for i, w in enumerate(col_widths2, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-        
+    for c in range(5, 12):
+        col_letter = openpyxl.utils.get_column_letter(c)
+        sum_cell = ws.cell(row=r_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{r_idx-1})")
+        sum_cell.font = font_header; sum_cell.border = thin_border; sum_cell.fill = fill_sum
+        sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
+
+    ws.cell(row=r_idx, column=12).border = thin_border; ws.cell(row=r_idx, column=12).fill = fill_sum
+
+    # 7. 하단 수식 라인 (가지급금 - 총경비)
+    r_idx += 2
+    ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
+    summary_cell = ws.cell(row=r_idx, column=1)
+    # 엑셀에서 사용자가 직접 입력할 수 있도록 텍스트와 빈칸 조합
+    summary_cell.value = f"가지급금(이월잔액포함) [        ]  -  총경비사용금액 [ =E{r_idx-2} ]  =  잔액 [        ]"
+    summary_cell.font = Font(name='맑은 고딕', size=11, bold=True)
+    summary_cell.alignment = align_center
+
+    # 열 너비 자동 조절 및 고정
+    widths = [5, 8, 30, 15, 12, 10, 10, 10, 10, 12, 10, 10]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
     output = BytesIO()
     wb.save(output)
     output.seek(0)
     
-    filename = f"출장정산_{target_team}_{target_month}.xlsx"
+    filename = f"정산서_{target_team}_{target_month}.xlsx"
     return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# 기존 코드에 아래 라우트(경로)들을 추가하시면 됩니다.
 
 @app.route('/backup/download')
 def backup_download():
