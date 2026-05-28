@@ -276,7 +276,6 @@ def reorder_expenses():
             
     save_data()
     return redirect(url_for('index_page', search_month=search_month))
-
 @app.route('/download/cover')
 def download_cover():
     target_team = request.args.get('team')
@@ -285,137 +284,165 @@ def download_cover():
     if not target_team.endswith('팀') and target_team != "시운전":
         target_team += "팀"
         
-    team_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
-    team_data.sort(key=lambda x: (x.get('date', ''), x.get('order', 999)))
+    raw_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
+    
+    # 🔥 [중요] 6번 조건: 같은 날짜, 같은 내용, 같은 출장지, 같은 사용자는 한 줄로 묶어서 비용 합산
+    aggregated = {}
+    for exp in raw_data:
+        # 그룹핑 키 생성 (날짜, 내용, 출장지, 사용자 조합)
+        key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''))
+        amt = exp.get('amount', 0)
+        cat = exp.get('category', '기타')
+        
+        if key not in aggregated:
+            aggregated[key] = {
+                "date": key[0], "content": key[1], "place": key[2], "user_name": key[3],
+                "total": 0, "교통비": 0, "식대비": 0, "숙박비": 0, "차량유지비": 0, "기타": 0
+            }
+            
+        aggregated[key]["total"] += amt
+        
+        # 1번 조건: 소모품비와 기타는 '기타'로 합산 매핑
+        if cat in ["교통비", "주차비"]:
+            aggregated[key]["교통비"] += amt
+        elif cat in ["식비", "식대비"]:
+            aggregated[key]["식대비"] += amt
+        elif cat == "숙박비":
+            aggregated[key]["숙박비"] += amt
+        elif cat == "차량유지비":
+            aggregated[key]["차량유지비"] += amt
+        else: # 소모품비, 기타 등등은 전부기타로 병합
+            aggregated[key]["기타"] += amt
+
+    # 정렬 (날짜 순)
+    sorted_rows = list(aggregated.values())
+    sorted_rows.sort(key=lambda x: x['date'])
     
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = f"{target_month[5:7]}월 정산서"
-    
-    # 격자선 활성화
     ws.views.sheetView[0].showGridLines = True
     
-    # 스타일 정의
-    font_title = Font(name='맑은 고딕', size=16, bold=True, color='1E3A8A')
-    font_header = Font(name='맑은 고딕', size=10, bold=True)
-    font_main = Font(name='맑은 고딕', size=9)
-    font_sum = Font(name='맑은 고딕', size=10, bold=True)
+    # 7번 조건: 전체 글자 크기 상향 정의
+    font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
+    font_header = Font(name='맑은 고딕', size=11, bold=True)
+    font_main = Font(name='맑은 고딕', size=10)
+    font_sum = Font(name='맑은 고딕', size=11, bold=True)
     
     thin_border = Border(
-        left=Side(style='thin', color='A0AEC0'),
-        right=Side(style='thin', color='A0AEC0'),
-        top=Side(style='thin', color='A0AEC0'),
-        bottom=Side(style='thin', color='A0AEC0')
+        left=Side(style='thin', color='A0AEC0'), right=Side(style='thin', color='A0AEC0'),
+        top=Side(style='thin', color='A0AEC0'), bottom=Side(style='thin', color='A0AEC0')
     )
     fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
     fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
-    align_center = Alignment(horizontal='center', vertical='center')
-    align_right = Alignment(horizontal='right', vertical='center')
-    align_left = Alignment(horizontal='left', vertical='center')
+    
+    # 3번 조건: 셀에 맞춤(shrink_to_fit) 공통 셋업용 얼라인먼트
+    align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
+    align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
+    align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
 
-    # 1. 제목 및 결재란 생성
+    # 제목 및 결재란 세팅 (11개 열 기준 정렬 보정)
     ws.merge_cells('A1:D2')
-    title_cell = ws['A1']
-    title_cell.value = f"{target_month[5:7]}월 개인경비 사용내역"
-    title_cell.font = font_title
-    title_cell.alignment = Alignment(horizontal='left', vertical='center')
+    ws['A1'] = f"{target_month[5:7]}월 개인경비 사용내역"
+    ws['A1'].font = font_title
+    ws['A1'].alignment = Alignment(horizontal='left', vertical='center')
 
     approve_headers = ["작성", "검토", "검토", "승인"]
     for i, h in enumerate(approve_headers):
-        col_idx = 9 + i
+        col_idx = 8 + i # H, I, J, K열에 균등 배치
         cell = ws.cell(row=1, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
         cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
-        
         ws.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
-        for r in range(2, 4):
-            ws.cell(row=r, column=col_idx).border = thin_border
-    ws.row_dimensions[1].height = 20
-    ws.row_dimensions[2].height = 22
-    ws.row_dimensions[3].height = 22
+        for r in range(2, 4): ws.cell(row=r, column=col_idx).border = thin_border
+        
+    # 5번 조건: 행 높이 대폭 상향
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 24
+    ws.row_dimensions[3].height = 24
 
-    # 작성 정보
-    today_str = datetime.date.today().strftime('%Y년 %m월 %d일')
     ws.merge_cells('A4:D4')
-    ws['A4'] = f"작성일자: {today_str}  /  부서: {target_team}"
+    ws['A4'] = f"작성일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}  /  부서: {target_team}"
     ws['A4'].font = font_main
+    ws.row_dimensions[4].height = 24
 
-    # 2. 헤더 구성
-    headers = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "소모품비", "차량유지비", "기타", "사용자"]
+    # 표 헤더 (소모품비 제외된 11개 체제)
+    headers = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "차량유지비", "기타", "사용자"]
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=5, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws.row_dimensions[5].height = 28
+    ws.row_dimensions[5].height = 32
 
-    # 3. 데이터 로우 바인딩
+    # 데이터 입력 바인딩
     r_idx = 6
-    for idx, exp in enumerate(team_data, 1):
-        ws.cell(row=r_idx, column=1, value=idx).border = thin_border
-        ws.cell(row=r_idx, column=2, value=exp['date'][5:]).border = thin_border
-        ws.cell(row=r_idx, column=3, value=exp['content']).border = thin_border
-        ws.cell(row=r_idx, column=4, value=exp['place']).border = thin_border
+    for idx, row_data in enumerate(sorted_rows, 1):
+        ws.cell(row=r_idx, column=1, value=idx).alignment = align_center
+        ws.cell(row=r_idx, column=2, value=row_data['date'][5:]).alignment = align_center
+        ws.cell(row=r_idx, column=3, value=row_data['content']).alignment = align_left
+        ws.cell(row=r_idx, column=4, value=row_data['place']).alignment = align_center
         
-        amt = exp['amount']
-        cat = exp['category']
+        # 합계 금액 세팅
+        t_cell = ws.cell(row=r_idx, column=5, value=row_data['total'])
+        t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
         
-        total_cell = ws.cell(row=r_idx, column=5, value=amt)
-        total_cell.font = Font(name='맑은 고딕', size=9, bold=True); total_cell.number_format = '#,##0'
-        
-        col_map = {"교통비": 6, "주차비": 6, "식비": 7, "식대비": 7, "숙박비": 8, "소모품비": 9, "차량유지비": 10}
-        target_col = col_map.get(cat, 11)
-        
-        for c in range(5, 12):
-            v_cell = ws.cell(row=r_idx, column=c)
-            v_cell.border = thin_border; v_cell.alignment = align_right
-            if c == target_col: v_cell.value = amt
-            v_cell.number_format = '#,##0'
+        # 분류 금액 바인딩
+        categories_keys = ["교통비", "식대비", "숙박비", "차량유지비", "기타"]
+        for c_idx, cat_name in enumerate(categories_keys, 6):
+            v_cell = ws.cell(row=r_idx, column=c_idx)
+            v_cell.value = row_data[cat_name] if row_data[cat_name] > 0 else ""
+            v_cell.number_format = '#,##0'; v_cell.alignment = align_right
             
-        ws.cell(row=r_idx, column=12, value=exp['user_name']).border = thin_border
+        # 4번 조건: K열 사용자명 무조건 가운데 정렬
+        ws.cell(row=r_idx, column=11, value=row_data['user_name']).alignment = align_center
         
-        for c in range(1, 5): ws.cell(row=r_idx, column=c).alignment = align_center
-        ws.cell(row=r_idx, column=3).alignment = align_left
+        for c in range(1, 12):
+            cell = ws.cell(row=r_idx, column=c)
+            if c != 5: cell.font = font_main
+            cell.border = thin_border
+            
+        ws.row_dimensions[r_idx].height = 28
         r_idx += 1
 
-    # 4. 합계행 생성 (E열 수식이 실시간 총경비가 됨)
+    # 합계행 디자인 및 수식
     sum_row_idx = r_idx
     ws.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
     footer_label = ws.cell(row=sum_row_idx, column=1, value="합   계")
     footer_label.font = font_sum; footer_label.alignment = align_center
     
-    for c in range(1, 13):
+    for c in range(1, 12):
         cell = ws.cell(row=sum_row_idx, column=c)
-        cell.border = thin_border
-        cell.fill = fill_sum
+        cell.border = thin_border; cell.fill = fill_sum
     
-    for c in range(5, 12):
+    for c in range(5, 11):
         col_letter = openpyxl.utils.get_column_letter(c)
         sum_cell = ws.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
         sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
-    ws.row_dimensions[sum_row_idx].height = 25
+        
+    ws.cell(row=sum_row_idx, column=11).alignment = align_center
+    ws.row_dimensions[sum_row_idx].height = 30
 
-    # 5. 부서별 가지급금 매핑 및 동적 수식 문자열 조립
+    # 하단 마감 정산 정보 및 동적 텍스트 연산식
     budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000, "시운전": 1000000}
     team_budget = budget_map.get(target_team, 0)
     budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
     
     r_idx += 2
-    ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
+    ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=11)
     summary_cell = ws.cell(row=r_idx, column=1)
     
-    # 엑셀 수식 글자 조립법 수정: 엑셀 내부에서 최종 금액(61,061 / 938,939)이 가독성 있게 연산되도록 구현
     if team_budget > 0:
         summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
     else:
         summary_cell.value = f'="가지급금금액(이월잔액포함) [ 0 ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT(0-E{sum_row_idx}, "#,##0") & " ]"'
         
-    summary_cell.font = Font(name='맑은 고딕', size=11, bold=True, color='1F2937')
+    summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
     summary_cell.alignment = align_center
-    ws.row_dimensions[r_idx].height = 30
+    ws.row_dimensions[r_idx].height = 36
 
-    # 너비 최적화
-    widths = [6, 10, 32, 16, 14, 11, 11, 11, 11, 13, 11, 11]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # 2번 조건: 가로 너비 조건 고정 (A=3, C=30, 나머지=10)
+    widths = {1: 3, 2: 10, 3: 30, 4: 10, 5: 10, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
+    for col_idx, w in widths.items():
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
     output = BytesIO()
     wb.save(output)
@@ -423,6 +450,7 @@ def download_cover():
     
     filename = f"정산서_{target_team}_{target_month}.xlsx"
     return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
 @app.route('/backup/download')
 def backup_download():
     # 현재 서버에 있는 expenses.json을 내 컴퓨터로 다운로드
