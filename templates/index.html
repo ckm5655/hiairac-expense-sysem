@@ -481,15 +481,17 @@
             }, 100);
         });
     </script>
-     <div style="margin: 20px 0; padding: 10px; border: 1px solid #ccc;">
-    <strong>데이터 백업 및 복구:</strong>
-    <a href="/backup/download" class="btn btn-primary">백업 파일 다운로드</a>
+    {% if team == "관리자" %}
+<div style="margin: 20px 0; padding: 10px; border: 1px solid #cbd5e1; background-color: #f8fafc; border-radius: 6px;">
+    <strong style="color: #0f172a;">⚙️ 시스템 데이터 관리 (관리자 전용):</strong>
+    <a href="/backup/download" class="btn-download" style="background: #2563eb; margin-top: 0; padding: 6px 12px; font-size: 13px; text-decoration: none; display: inline-block; border-radius: 4px; color: white;">💾 백업 파일 다운로드</a>
     
-    <form action="/backup/upload" method="post" enctype="multipart/form-data" style="display:inline;">
-        <input type="file" name="file" accept=".json">
-        <button type="submit" class="btn btn-warning">업로드하여 복구</button>
+    <form action="/backup/upload" method="post" enctype="multipart/form-data" style="display:inline; margin-left: 15px;">
+        <input type="file" name="file" accept=".json" style="font-size: 13px;">
+        <button type="submit" class="btn-action btn-edit" style="padding: 6px 12px; background: #d97706;">📂 업로드하여 복구</button>
     </form>
 </div>
+{% endif %}
     <div class="form-box">
         <h3 style="color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-top: 0;">📝 통합 출장 경비 신청 (영수증 일괄 등록)</h3>
         <form method="POST" action="/expense/add">
