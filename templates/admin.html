@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>관리자 통제 시스템</title>
+    <style>
+        body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #f8fafc; }
+        .admin-title { color: #0f172a; border-left: 5px solid #1e3a8a; padding-left: 10px; margin-bottom: 25px; }
+        table { width: 100%; border-collapse: collapse; background: white; margin-top: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: center; }
+        th { background: #0f172a; color: white; }
+        .filter-box { background: white; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 20px; }
+        .btn { display: inline-block; padding: 8px 16px; background: #1e3a8a; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2 class="admin-title">📊 [회계/관리자 전용] 부서 경비 통합 통제실</h2>
+    
+    <div class="filter-box">
+        <form method="GET" action="/admin">
+            <label style="font-weight: bold; margin-right: 10px;">팀별 필터링 조회:</label>
+            <select name="team_filter" onchange="this.form.submit()" style="padding: 8px 15px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                <option value="전체" {% if selected_team == '전체' %}selected{% endif %}>전체 부서 보기</option>
+                {% for team in teams %}
+                <option value="{{ team }}" {% if selected_team == team %}selected{% endif %}>{{ team }}</option>
+                {% endfor %}
+            </select>
+            <a href="/logout" style="float: right; color:#ef4444; font-weight: bold; text-decoration: none; line-height: 35px;">로그아웃</a>
+        </form>
+    </div>
+
+    <div style="background: white; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0;">
+        <h3>📋 현재 필터링된 실시간 데이터 내역 (현재 대상: {{ selected_team }})</h3>
+        
+        <div style="margin-bottom: 15px;">
+            <a href="/download/cover?team={{ selected_team }}" class="btn" style="background:#10b981;">📥 현재 팀 표지시트 출력</a>
+            <a href="/download/convert?team={{ selected_team }}" class="btn" style="background:#4b5563;">📥 ERP 변환파일 출력</a>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>소속 부서</th>
+                    <th>일자</th>
+                    <th>사용자명</th>
+                    <th>출장지 명칭</th>
+                    <th>상세 내역</th>
+                    <th>원래 구분</th>
+                    <th>지출 금액</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for exp in expenses %}
+                <tr>
+                    <td><strong>{{ exp.team }}</strong></td>
+                    <td>{{ exp.date }}일</td>
+                    <td>{{ exp.user_name }}</td>
+                    <td>{{ exp.place }}</td>
+                    <td style="text-align: left;">{{ exp.content }}</td>
+                    <td><span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:12px; font-size:12px;">{{ exp.category }}</span></td>
+                    <td style="text-align: right; font-weight: bold;">{{ "{:,.0f}".format(exp.amount) }}원</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
