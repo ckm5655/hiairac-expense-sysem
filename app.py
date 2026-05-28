@@ -1,15 +1,26 @@
+import subprocess
+import sys
+
+# [치트키] 서버 실행 시 필요한 라이브러리가 없으면 알아서 자동 설치하는 로직
+try:
+    from flask import Flask, render_template, request, redirect, url_for, session, send_file
+    import openpyxl
+except ModuleNotFoundError:
+    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "openpyxl"])
+    from flask import Flask, render_template, request, redirect, url_for, session, send_file
+    import openpyxl
+
 import datetime
 import os
 import uuid
 import json
-from flask import Flask, render_template, request, redirect, url_for, session, send_file
-import openpyxl
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
 from io import BytesIO
 
 app = Flask(__name__)
 app.secret_key = "trip_unified_advanced_system_2026"
- 
+
 USER_CREDENTIALS = {
     "admin": {"password": "1234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
