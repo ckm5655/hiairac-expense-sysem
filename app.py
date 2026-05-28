@@ -73,7 +73,7 @@ def index_page():
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
     user_team = session['team']
     
-    # 💡 에러 방지를 위해 카테고리 리스트를 명확하게 선언
+    # 💡 깔끔하고 중복 없는 카테고리 정의
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
     
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
@@ -130,8 +130,8 @@ def index_page():
             'amount': x['amount']
         })
         
-    # 📌 render_template 인자값으로 categories 가 확실하게 매핑되도록 처리
-  return render_template('index.html', 
+    # 📌 중복 오류를 완전히 제거한 안전한 리턴 구문
+    return render_template('index.html', 
                            username=session['username'], 
                            team=user_team,
                            current_month=current_month,
