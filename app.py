@@ -286,114 +286,140 @@ def download_cover():
         target_team += "팀"
         
     team_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
-    # 날짜와 순번 기준으로 정렬
     team_data.sort(key=lambda x: (x.get('date', ''), x.get('order', 999)))
     
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = f"{target_month[5:7]}월 정산서"
     
-    # 기본 스타일 설정
-    font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
-    font_header = Font(name='맑은 고딕', size=10, bold=True)
-    font_main = Font(name='맑은 고딕', size=9)
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid') # 연한 회색
-    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid') # 연한 파랑
-    align_center = Alignment(horizontal='center', vertical='center')
+    # 격자선 강제 활성화
+    ws.views.sheetView[0].showGridLines = True
+    
+    # 디자인 스타일 에셋 정의
+    font_title = Font(name='맑은 고딕', size=16, bold=True, color='1E3A8A')
+    font_header = Font(name='맑은 고딕', size=10, bold=True, color='000000')
+    font_main = Font(name='맑은 고딕', size=9, color='333333')
+    font_sum = Font(name='맑은 고딕', size=10, bold=True, color='000000')
+    
+    thin_border = Border(
+        left=Side(style='thin', color='D1D5DB'),
+        right=Side(style='thin', color='D1D5DB'),
+        top=Side(style='thin', color='D1D5DB'),
+        bottom=Side(style='thin', color='D1D5DB')
+    )
+    
+    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
+    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
+    
+    align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     align_right = Alignment(horizontal='right', vertical='center')
     align_left = Alignment(horizontal='left', vertical='center')
 
-    # 1. 제목 (좌측 상단)
+    # 1. 상단 타이틀
     ws.merge_cells('A1:D2')
     title_cell = ws['A1']
     title_cell.value = f"{target_month[5:7]}월 개인경비 사용내역"
     title_cell.font = font_title
     title_cell.alignment = Alignment(horizontal='left', vertical='center')
 
-    # 2. 결재란 (우측 상단)
+    # 2. 우측 결재란 탑재
     approve_headers = ["작성", "검토", "검토", "승인"]
     for i, h in enumerate(approve_headers):
-        col_idx = 9 + i # I열부터 시작
-        # 헤더
-        cell = ws.cell(row=1, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-        # 서명칸
-        sign_cell = ws.cell(row=2, column=col_idx)
-        sign_cell.border = thin_border
-    ws.row_dimensions[2].height = 40 # 서명란 높이
+        col_idx = 9 + i
+        cell_h = ws.cell(row=1, column=col_idx, value=h)
+        cell_h.font = font_header; cell_h.alignment = align_center; cell_h.border = thin_border
+        cell_h.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
+        
+        ws.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
+        for r in range(2, 4):
+            ws.cell(row=r, column=col_idx).border = thin_border
+            
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 22
+    ws.row_dimensions[3].height = 22
 
-    # 3. 작성 정보
-    today_str = datetime.date.today().strftime('%y년 %m월 %d일')
+    # 3. 문서 메타 정보 기입
+    today_str = datetime.date.today().strftime('%Y년 %m월 %d일')
     ws.merge_cells('A4:D4')
     info_cell = ws['A4']
     info_cell.value = f"작성일자: {today_str}  /  부서: {target_team}"
-    info_cell.font = font_main
+    info_cell.font = Font(name='맑은 고딕', size=9, italic=True, color='555555')
+    ws.row_dimensions[4].height = 20
 
-    # 4. 메인 테이블 헤더 (보내주신 두 번째 이미지 형식)
+    # 4. 표 머리글(Header) 레이아웃
     headers = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "소모품비", "차량유지비", "기타", "사용자"]
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=5, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws.row_dimensions[5].height = 25
+    ws.row_dimensions[5].height = 28
 
-    # 5. 데이터 입력
+    # 5. DB 데이터 순회 바인딩
     r_idx = 6
     for idx, exp in enumerate(team_data, 1):
-        ws.cell(row=r_idx, column=1, value=idx).border = thin_border # 순번
-        ws.cell(row=r_idx, column=2, value=exp['date'][5:]).border = thin_border # 일자 (MM-DD)
-        ws.cell(row=r_idx, column=3, value=exp['content']).border = thin_border # 내용
-        ws.cell(row=r_idx, column=4, value=exp['place']).border = thin_border # 출장지
+        ws.cell(row=r_idx, column=1, value=idx).alignment = align_center
+        ws.cell(row=r_idx, column=2, value=exp['date'][5:]).alignment = align_center # MM-DD
+        ws.cell(row=r_idx, column=3, value=exp['content']).alignment = align_left
+        ws.cell(row=r_idx, column=4, value=exp['place']).alignment = align_center
         
-        # 금액 분류 로직
         amt = exp['amount']
         cat = exp['category']
         
-        # 합계금액 (E열)
+        # 합계금액 열(E열) 세팅
         total_cell = ws.cell(row=r_idx, column=5, value=amt)
-        total_cell.font = Font(bold=True); total_cell.number_format = '#,##0'
+        total_cell.font = Font(name='맑은 고딕', size=9, bold=True)
+        total_cell.number_format = '#,##0'; total_cell.alignment = align_right
         
-        # 각 항목별 열 배정 (F~K)
-        # 6:교통비, 7:식대비, 8:숙박비, 9:소모품비, 10:차량유지비, 11:기타
+        # 가로 나열 카테고리 매핑 로직 개정
         col_map = {"교통비": 6, "주차비": 6, "식비": 7, "식대비": 7, "숙박비": 8, "소모품비": 9, "차량유지비": 10}
         target_col = col_map.get(cat, 11)
         
-        for c in range(5, 12): # 모든 금액 컬럼 초기화 및 테두리
-            v_cell = ws.cell(row=r_idx, column=c)
-            v_cell.border = thin_border; v_cell.alignment = align_right
-            if c == target_col: v_cell.value = amt
-            v_cell.number_format = '#,##0'
-            
-        ws.cell(row=r_idx, column=12, value=exp['user_name']).border = thin_border # 사용자
+        for c in range(6, 12):
+            val_cell = ws.cell(row=r_idx, column=c)
+            val_cell.number_format = '#,##0'; val_cell.alignment = align_right
+            if c == target_col:
+                val_cell.value = amt
+                
+        ws.cell(row=r_idx, column=12, value=exp['user_name']).alignment = align_center
         
-        for c in range(1, 5): ws.cell(row=r_idx, column=c).alignment = align_center
-        ws.cell(row=r_idx, column=3).alignment = align_left # 내용은 좌측정렬
+        # 기본 폰트 및 테두리 마감 일괄 처리
+        for c in range(1, 13):
+            cell = ws.cell(row=r_idx, column=c)
+            if c != 5: cell.font = font_main
+            cell.border = thin_border
+            
+        ws.row_dimensions[r_idx].height = 22
         r_idx += 1
 
-    # 6. 합계행 (Footer)
+    # 6. 마감 합계 행 (Grid Border 유실 버그 완벽 패치 버전)
     ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=4)
     footer_label = ws.cell(row=r_idx, column=1, value="합   계")
-    footer_label.font = font_header; footer_label.alignment = align_center; footer_label.border = thin_border; footer_label.fill = fill_sum
+    footer_label.font = font_sum; footer_label.alignment = align_center
     
+    # 모든 숨겨진 셀까지 격자를 순회하며 강제로 그려줌
+    for c in range(1, 13):
+        cell = ws.cell(row=r_idx, column=c)
+        cell.border = thin_border
+        cell.fill = fill_sum
+        
     for c in range(5, 12):
         col_letter = openpyxl.utils.get_column_letter(c)
         sum_cell = ws.cell(row=r_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{r_idx-1})")
-        sum_cell.font = font_header; sum_cell.border = thin_border; sum_cell.fill = fill_sum
-        sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
+        sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
 
-    ws.cell(row=r_idx, column=12).border = thin_border; ws.cell(row=r_idx, column=12).fill = fill_sum
+    ws.row_dimensions[r_idx].height = 25
 
-    # 7. 하단 수식 라인 (가지급금 - 총경비)
+    # 7. 최하단 가지급 마감 정산 수식 영역 (동적 행 번호 추적 기법 적용)
+    sum_row_num = r_idx  # 현재 합계행의 정확한 인덱스를 변수로 저장
     r_idx += 2
     ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
     summary_cell = ws.cell(row=r_idx, column=1)
-    # 엑셀에서 사용자가 직접 입력할 수 있도록 텍스트와 빈칸 조합
-    summary_cell.value = f"가지급금(이월잔액포함) [        ]  -  총경비사용금액 [ =E{r_idx-2} ]  =  잔액 [        ]"
-    summary_cell.font = Font(name='맑은 고딕', size=11, bold=True)
+    summary_cell.value = f"가지급금(이월잔액포함) [              ]   -   총경비사용금액 [ =E{sum_row_num} ]   =   잔액 [              ]"
+    summary_cell.font = Font(name='맑은 고딕', size=11, bold=True, color='1F2937')
     summary_cell.alignment = align_center
+    ws.row_dimensions[r_idx].height = 30
 
-    # 열 너비 자동 조절 및 고정
-    widths = [5, 8, 30, 15, 12, 10, 10, 10, 10, 12, 10, 10]
+    # 해상도별 열 너비 최적화 밸런싱 고정
+    widths = [6, 10, 32, 16, 14, 11, 11, 11, 11, 13, 11, 11]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
