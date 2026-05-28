@@ -73,7 +73,6 @@ def index_page():
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
     user_team = session['team']
     
-    # 💡 깔끔하고 중복 없는 카테고리 정의
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
     
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
@@ -130,7 +129,6 @@ def index_page():
             'amount': x['amount']
         })
         
-    # 📌 중복 오류를 완전히 제거한 안전한 리턴 구문
     return render_template('index.html', 
                            username=session['username'], 
                            team=user_team,
@@ -139,7 +137,7 @@ def index_page():
                            trips=trips_list,
                            dashboard_stats=dashboard_stats,
                            raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
-                          
+
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
     if 'user_id' not in session: return redirect(url_for('login_page'))
