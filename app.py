@@ -24,7 +24,6 @@ ACCOUNT_MAPPING = {
     "소모품비": "530", "택배비": "524", "수수료": "531", "숙박비": "512", "기타": "533"
 }
 
-# 💾 Render에서 데이터가 날아가지 않도록 파일 기반 저장 구조 추가
 DATA_FILE = "expenses.json"
 
 def load_data():
@@ -44,7 +43,6 @@ def save_data():
     except Exception as e:
         print("데이터 저장 실패:", e)
 
-# 최초 서버 구동 시 기존 데이터 로드
 ALL_EXPENSES = load_data()
 
 @app.route('/')
@@ -123,26 +121,27 @@ def index_page():
         elif "영업" in t_name: dashboard_stats["영업팀"] += x['amount']
         elif "전장" in t_name: dashboard_stats["전장팀"] += x['amount']
         
-    # 3. 📊 [여기서 수정!] 그래프용 최근 6개월 범위 데이터 수집
-    # 조회된 월(current_month: 예 '2026-05')을 기준으로 과거 5개월 전 시작월 계산
+    # 3. 📊 그래프용 최근 6개월 범위 데이터 수집 로직 보정
     try:
         base_date = datetime.datetime.strptime(current_month, "%Y-%m")
     except:
-        base_date = datetime.datetime.today()
+        try:
+            base_date = datetime.datetime.strptime(current_month + "-01", "%Y-%m-%d")
+        except:
+            base_date = datetime.datetime.today()
 
-    # 안전하게 연도와 월을 역산하여 5개월 전의 'YYYY-MM' 문자열 획득
     start_year = base_date.year
     start_month_num = base_date.month - 5
     while start_month_num <= 0:
         start_month_num += 12
         start_year -= 1
+        
     start_month_str = f"{start_year}-{start_month_num:02d}"
     end_month_str = current_month
 
     raw_stats = []
     for x in ALL_EXPENSES:
         data_month = x.get('date', '')[:7]
-        # 계산된 최근 6개월 범위 내에 있는 데이터만 전부 담아서 프론트로 전달
         if start_month_str <= data_month <= end_month_str:
             raw_stats.append({
                 'team': x['team'],
@@ -202,7 +201,7 @@ def add_expense():
         }
         ALL_EXPENSES.append(new_item)
     
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/edit', methods=['POST'])
@@ -236,7 +235,7 @@ def edit_expense():
                 x['category'] = sub_map[sid]['category']
                 x['amount'] = sub_map[sid]['amount']
                 
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/delete/<trip_id>')
@@ -247,7 +246,7 @@ def delete_expense(trip_id):
     
     ALL_EXPENSES = [x for x in ALL_EXPENSES if x['trip_id'] != trip_id]
     
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/expense/reorder', methods=['POST'])
@@ -264,7 +263,7 @@ def reorder_expenses():
         if tid in order_map:
             x['order'] = order_map[tid]
             
-    save_data() # 데이터 변경 시 파일 저장
+    save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
 @app.route('/download/cover')
@@ -281,7 +280,6 @@ def download_cover():
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "정산서 표지"
-    
     ws1.views.sheetView[0].showGridLines = True
     
     font_title = Font(name='맑은 고딕', size=16, bold=True)
@@ -422,7 +420,7 @@ def download_cover():
     if r_idx2 > 6:
         ws2.cell(row=r_idx2, column=3, value="총 합계").font = font_bold; ws2.cell(row=r_idx2, column=3).alignment = Alignment(horizontal='center')
         sum_cell = ws2.cell(row=r_idx2, column=6, value=f"=SUM(F6:F{r_idx2-1})")
-        sum_cell.font = font_bold; sum_cell.alignment = Alignment(horizontal='right'); sum_cell.number_format = '#,##0'; sum_cell.fill = fill_accent
+        sum_cell.font = font_bold; sum_cell.alignment = Alignment(right); sum_cell.number_format = '#,##0'; sum_cell.fill = fill_accent
         ws2.cell(row=r_idx2, column=6).border = double_bottom_border
         
     col_widths2 = [12, 14, 35, 18, 14, 15, 12, 10]
@@ -437,6 +435,5 @@ def download_cover():
     return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if __name__ == '__main__':
-    # 🌐 Render의 동적 포트 바인딩 설정 반영
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
