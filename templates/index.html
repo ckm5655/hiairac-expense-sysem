@@ -55,7 +55,7 @@
         .btn-action { padding: 4px 8px; font-size: 12px; font-weight: bold; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; }
         .btn-edit { background: #f59e0b; color: white; border: none; }
         .btn-delete { background: #dc2626; color: white; border: none; }
-        .btn-order { background: #4b5563; color: white; border: none; padding: 5px 10px; font-size: 13px; border-radius: 4px; cursor: pointer; }
+        .btn-order { background: #4b5563; color: white; padding: 6px 12px; font-size: 13px; border-radius: 4px; cursor: pointer; border: none; font-weight: bold; }
         
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); overflow-y: auto; }
         .modal-content { background: white; margin: 5% auto; padding: 25px; border-radius: 8px; width: 550px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
@@ -303,7 +303,7 @@
                 : rawStatsData.filter(x => x.team === selectedTeam);
 
             let totalSum = 0;
-            let categoryMap = {'교통비': 0, '식대비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '기타': 0};
+            let categoryMap = {'교통비': 0, '교통/주차비': 0, '식대비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '기타': 0};
             let placeMap = {};
 
             filtered.forEach(item => {
@@ -336,7 +336,7 @@
 
             if (categoryChartObj) {
                 categoryChartObj.data.datasets[0].data = [
-                    categoryMap['교통비'], 
+                    (categoryMap['교통비'] + categoryMap['교통/주차비']), 
                     (categoryMap['식대비'] + categoryMap['식비']), 
                     categoryMap['소모품비'], 
                     categoryMap['차량유지비'], 
@@ -419,9 +419,9 @@
             const pieCtx = document.getElementById('categoryPieChart').getContext('2d');
             categoryChartObj = new Chart(pieCtx, {
                 type: 'pie',
-                plugins: [ChartDataLabels], // 💡 데이터라벨 플러그인 등록
+                plugins: [ChartDataLabels],
                 data: {
-                    labels: ['교통/주차비', '식대비', '소모품비', '차량유지비', '기타'],
+                    labels: ['교통비', '식대비', '소모품비', '차량유지비', '기타'],
                     datasets: [{ data: [0, 0, 0, 0, 0], backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#9ca3af'] }]
                 },
                 options: {
@@ -429,7 +429,6 @@
                     maintainAspectRatio: false,
                     plugins: {
                         title: { display: true, font:{size:13, bold:true} },
-                        // 💡 차트 조각 위에 상시 고정되는 퍼센트(%) 라벨 디자인 설정
                         datalabels: {
                             color: '#ffffff',
                             anchor: 'center',
@@ -442,7 +441,7 @@
                                 let sum = datasets[0].data.reduce((a, b) => a + b, 0);
                                 if (sum === 0) return '';
                                 let percentageNum = (value * 100 / sum);
-                                if (percentageNum < 5) return ''; // 5% 미만의 좁은 영역은 글자 숨김 처리로 글자 겹침 방지
+                                if (percentageNum < 5) return ''; 
                                 return percentageNum.toFixed(1) + "%";
                             }
                         }
@@ -539,7 +538,7 @@
                     </div>
                 </div>
                 {% if team == "관리자" %}
-                <div style="margin-top:15px; background:#fff3cd; padding:10px; border-radius:4px; border:1px solid #ffeba2;">
+                <div style="margin-top:15px; background:#fff3cd; padding:10px; border-radius:4px; border-radius:4px; border:1px solid #ffeba2;">
                     <label style="font-weight:bold; font-size:13px;">⚙️ 관리자 전용 대리 등록 권한 -> 대상 팀 선택 : </label>
                     <select name="target_team" style="padding:5px; width:150px; display:inline-block; margin-left:10px;">
                         <option value="시운전">시운전</option>
@@ -571,7 +570,10 @@
                 {% if team == "관리자" %}<span style="color:#2563eb;">(전사 부서 전체 통합 노출 모드)</span>{% endif %}
                 <span style="font-size:12px; color:#10b981; font-weight:normal;">(💡 드래그로 순서 배치 가능)</span>
             </h3>
-            <button type="submit" form="orderForm" class="btn-order">🔄 변경된 순번으로 목록 재정렬</button>
+            <div>
+                <a href="/download/cover?team={{ team }}&month={{ current_month }}" class="btn-download" style="background: #10b981; margin-top: 0; padding: 6px 12px; font-size: 13px; text-decoration: none; display: inline-block; border-radius: 4px; color: white; font-weight: bold; margin-right: 5px;">📥 엑셀 정산서 다운로드</a>
+                <button type="submit" form="orderForm" class="btn-order">🔄 순번 재정렬 저장</button>
+            </div>
         </div>
         
         <form id="orderForm" method="POST" action="/expense/reorder">
