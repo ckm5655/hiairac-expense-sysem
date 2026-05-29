@@ -6,7 +6,7 @@ try:
     from flask import Flask, render_template, request, redirect, url_for, session, send_file
     import openpyxl
 except ModuleNotFoundError:
-    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...") 
+    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "openpyxl"])
     from flask import Flask, render_template, request, redirect, url_for, session, send_file
     import openpyxl
@@ -56,11 +56,10 @@ def save_data():
 
 ALL_EXPENSES = load_data()
 
-# 💡 부서명 불일치 해결을 위한 텍스트 표준화 도우미 함수
+# 부서명 불일치 해결을 위한 텍스트 표준화 도우미 함수
 def is_match_team(db_team, target_team):
     if not db_team or not target_team:
         return False
-    # 서로 공백을 제거하고 '팀' 글자를 떼어낸 순수 키워드로 비교 (ex: '시운전' == '시운전')
     return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
 
 @app.route('/')
@@ -89,6 +88,7 @@ def index_page():
         return redirect(url_for('login_page'))
     
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
+    current_year = current_month[:4] # 💡 현재 선택된 연도 추출 (ex: "2026")
     user_team = session['team']
     
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
@@ -96,7 +96,6 @@ def index_page():
     # 1. 이번 달 기준 데이터 필터링
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
     
-    # 🌟 [핵심 수정] 일반 팀 로그인 시 '시운전' / '시운전팀' 유연하게 동시 매칭되도록 보정
     if user_team != "관리자":
         month_data = [x for x in month_data if is_match_team(x.get('team', ''), user_team)]
         
@@ -130,17 +129,26 @@ def index_page():
     for t in trips_list:
         t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
         
-    # 2. 대시보드 상단 미니 통계 (선택한 '당월' 전체 부서 기준 합계 및 안전 보정)
-    dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0}
-    all_month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
+    # 2. 📊 대시보드 상단 통계 (선택월 지출총합 및 해당 연도 고정누적 계산)
+    # 총합=선택월 전체 / 고정누적=해당 연도 누적액으로 사용하도록 대시보드 데이터 구조 보정 가능
+    dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0, "연도누적": 0}
     
-    for x in all_month_data:
-        dashboard_stats["총합"] += x['amount']
-        t_name = x.get('team', '')
-        if "시운전" in t_name: dashboard_stats["시운전"] += x['amount']
-        elif "생산" in t_name: dashboard_stats["생산팀"] += x['amount']
-        elif "영업" in t_name: dashboard_stats["영업팀"] += x['amount']
-        elif "전장" in t_name: dashboard_stats["전장팀"] += x['amount']
+    for x in ALL_EXPENSES:
+        x_date = x.get('date', '')
+        x_amount = x.get('amount', 0)
+        
+        # [A] 선택 월 지출 종합 계산 (정확히 선택된 월만 계산)
+        if x_date.startswith(current_month):
+            dashboard_stats["총합"] += x_amount
+            t_name = x.get('team', '')
+            if "시운전" in t_name: dashboard_stats["시운전"] += x_amount
+            elif "생산" in t_name: dashboard_stats["생산팀"] += x_amount
+            elif "영업" in t_name: dashboard_stats["영업팀"] += x_amount
+            elif "전장" in t_name: dashboard_stats["전장팀"] += x_amount
+            
+        # [B] 🌟 [핵심 수정] 고정 누적액 계산 (올해 해당 연도 데이터만 누적합산)
+        if x_date.startswith(current_year):
+            dashboard_stats["연도누적"] += x_amount
         
     # 3. 그래프용 최근 6개월 범위 데이터 수집 로직
     try:
@@ -191,19 +199,19 @@ def add_expense():
         if not user_team.endswith('팀') and user_team != "시운전":
             user_team += "팀"
 
-    expense_date = request.form.get('expense_date')
+    expense_date = request.form.get('expense_date') # 유저가 폼에서 입력한 날짜 (ex: "2026-04-15")
     user_name = request.form.get('user_name')
     place = request.form.get('place')
     content = request.form.get('content')
-    search_month = request.form.get('search_month')
     
     categories = request.form.getlist('receipt_category')
     amounts = request.form.getlist('receipt_amount')
     
     trip_id = str(uuid.uuid4())
     
-    current_month = expense_date[:7]
-    existing_orders = [x.get('order', 0) for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
+    # 🌟 [핵심 수정] 폼 입력 날짜 기반으로 해당 월의 기존 정산 순서(order) 파악
+    actual_month = expense_date[:7] 
+    existing_orders = [x.get('order', 0) for x in ALL_EXPENSES if x.get('date', '').startswith(actual_month)]
     next_order = max(existing_orders) + 1 if existing_orders else 1
     
     for cat, amt in zip(categories, amounts):
@@ -223,7 +231,8 @@ def add_expense():
         ALL_EXPENSES.append(new_item)
     
     save_data()
-    return redirect(url_for('index_page', search_month=search_month))
+    # 🌟 [보완] 데이터를 등록한 '실제 타겟 월'의 화면으로 이동시켜 꼬임 인식을 방지합니다.
+    return redirect(url_for('index_page', search_month=actual_month))
 
 @app.route('/expense/edit', methods=['POST'])
 def edit_expense():
@@ -258,7 +267,9 @@ def edit_expense():
                 x['amount'] = sub_map[sid]['amount']
                 
     save_data()
-    return redirect(url_for('index_page', search_month=search_month))
+    # 수정 완료 후에도 실제 수정된 날짜의 월로 리다이렉트 처리 유연화
+    actual_month = expense_date[:7]
+    return redirect(url_for('index_page', search_month=actual_month))
 
 @app.route('/expense/delete/<trip_id>')
 def delete_expense(trip_id):
@@ -288,13 +299,11 @@ def reorder_expenses():
     save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
-# 🌟 [대대적 전면 보수] 전사 통합 엑셀 다운로드 및 부서별 내용 실종 방지 기능 구현
 @app.route('/download/cover')
 def download_cover():
     target_team = request.args.get('team', 'ALL')
     target_month = request.args.get('month', datetime.date.today().strftime('%Y-%m'))
     
-    # 전사 전체('ALL')인 경우와 특정 부서인 경우 구분 필터링
     if target_team == 'ALL':
         raw_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(target_month)]
         display_team_title = "전사 통합"
@@ -306,10 +315,8 @@ def download_cover():
 
     raw_data.sort(key=lambda x: (x.get('order', 999), x.get('date', '')))
     
-    # --- [데이터 가공] 1번 시트용: 건별 일괄 합산 로직 ---
     aggregated = {}
     for exp in raw_data:
-        # 부서 구분도 유니크 키에 포함시켜 전사 통합 출력 시 데이터 분별력 유도
         key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''), exp.get('team', ''))
         amt = exp.get('amount', 0)
         cat = exp.get('category', '기타')
@@ -390,7 +397,6 @@ def download_cover():
     for idx, row_data in enumerate(sorted_cover_rows, 1):
         ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
         ws1.cell(row=r_idx, column=2, value=row_data['date'][5:]).alignment = align_center
-        # 전사 모드일 때는 내용 앞에 부서명을 함께 표시해 시인성 확대
         display_content = f"[{row_data['team']}] {row_data['content']}" if target_team == 'ALL' else row_data['content']
         ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
         ws1.cell(row=r_idx, column=4, value=row_data['place']).alignment = align_center
@@ -452,7 +458,7 @@ def download_cover():
     for col_idx, w in widths1.items():
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
-    # 📑 두 번째 시트: 상세내역
+    # 두 번째 시트: 상세내역
     ws2 = wb.create_sheet(title="상세내역")
     ws2.views.sheetView[0].showGridLines = True
     
