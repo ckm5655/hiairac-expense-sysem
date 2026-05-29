@@ -288,7 +288,6 @@
             return result;
         }
 
-        // '시운전'과 '시운전팀' 명칭 상호 매칭 함수
         function isSameTeam(t1, t2) {
             if (!t1 || !t2) return false;
             let norm1 = t1.replace('팀', '').trim();
@@ -296,15 +295,22 @@
             return norm1 === norm2;
         }
 
+        // 대시보드 및 리스트 필터링 핵심 함수 수정본 적용
         function filterTeamStats(selectedTeam, btnElement) {
             if (btnElement) {
                 document.querySelectorAll('.btn-toggle').forEach(btn => btn.classList.remove('active'));
                 btnElement.classList.add('active');
             }
 
+            // [날짜 필터 고도화] 전체 통계 데이터에서 오직 선택한 마감 월(currentMonthStr)의 데이터만 추출
+            const monthFiltered = rawStatsData.filter(item => {
+                const fullDate = item.date || item.expense_date || item.month || "";
+                return fullDate.substring(0, 7) === currentMonthStr;
+            });
+
             const filtered = (selectedTeam === 'ALL') 
-                ? rawStatsData 
-                : rawStatsData.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
+                ? monthFiltered 
+                : monthFiltered.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
 
             let totalSum = 0;
             let categoryMap = {'교통비': 0, '교통/주차비': 0, '식대비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '기타': 0};
@@ -354,7 +360,11 @@
             let trendMap = {};
             recent6.forEach(m => trendMap[m.key] = 0);
 
-            filtered.forEach(item => {
+            const trendFiltered = (selectedTeam === 'ALL') 
+                ? rawStatsData 
+                : rawStatsData.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
+
+            trendFiltered.forEach(item => {
                 const fullDate = item.date || item.expense_date || item.month || "";
                 if (fullDate.length >= 7) {
                     const yyyymm = fullDate.substring(0, 7);
@@ -368,7 +378,7 @@
                 }
             });
 
-            // 🌟 [핵심 수정] 하단 데이터 목록 테이블 행(Row) 필터링 조건 전면 개편 🌟
+            // 하단 데이터 목록 테이블 행(Row) 필터링 조건
             const rows = document.querySelectorAll('#drag_tbody .drag-row');
             rows.forEach(row => {
                 const teamCell = row.querySelector('.team-badge');
@@ -437,7 +447,7 @@
                                 let sum = datasets[0].data.reduce((a, b) => a + b, 0);
                                 if (sum === 0) return '';
                                 let percentageNum = (value * 100 / sum);
-                                if (percentageNum < 8) return ''; // 🌟 작은 값 글자 겹침 방지 필터링 기준 강화
+                                if (percentageNum < 8) return ''; 
                                 return percentageNum.toFixed(1) + "%";
                             }
                         }
@@ -519,7 +529,7 @@
                         
                         <input type="date" name="expense_date" 
                                min="{{ month_start_date }}" 
-                           max="{{ month_end_date }}" required>
+                               max="{{ month_end_date }}" required>
                     <input type="hidden" name="search_month" value="{{ current_month }}">
                     </div>
                     <div class="input-group">
@@ -609,31 +619,25 @@
                         <td class="drag-handle">☰</td>
                         <td>
                             <input type="hidden" name="trip_ids" value="{{ trip.trip_id }}">
-                            <input type="number" name="display_orders" value="{{ trip.order }}" class="order-input" readonly style="width: 45px; text-align: center; border: none; background:transparent; font-weight:bold;">
+                            <input type="number" name="display_orders" value="{{ trip.order }}" class="order-input" style="width:40px; text-align:center;" readonly>
                         </td>
-                        <td><span class="team-badge" style="background:#e2e8f0; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:12px;">{{ trip.team }}</span></td>
+                        <td><span class="team-badge">{{ trip.team }}</span></td>
                         <td>{{ trip.date }}</td>
-                        <td style="font-weight: bold; color: #1e3a8a;">{{ trip.user_name }}</td>
+                        <td>{{ trip.user }}</td>
                         <td>{{ trip.place }}</td>
-                        <td style="text-align: left;">{{ trip.content }}</td>
-                        <td style="text-align: left; font-size: 13px; color: #555;">
-                            {% for detail in trip.details %}
-                                <span style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; margin-right:4px; display:inline-block; margin-bottom:2px;">
-                                    {{ detail.category }}: {{ "{:,.0f}".format(detail.amount) }}원
-                                </span>
-                            {% endfor %}
-                        </td>
-                        <td style="text-align: right; font-weight: bold; color:#10b981;">{{ "{:,.0f}".format(trip.total_amount) }}원</td>
+                        <td style="text-align:left;">{{ trip.content }}</td>
+                        <td style="font-size:12px; text-align:left; color:#4b5563;">{{ trip.items_desc }}</td>
+                        <td style="font-weight:bold; text-align:right;">{{ "{:,.0f}".format(trip.total_amount) }}원</td>
                         <td>
                             <button type="button" class="btn-action btn-edit" 
                                     data-trip-id="{{ trip.trip_id }}"
                                     data-date="{{ trip.date }}"
-                                    data-user="{{ trip.user_name }}"
+                                    data-user="{{ trip.user }}"
                                     data-place="{{ trip.place }}"
                                     data-content="{{ trip.content }}"
                                     data-details='{{ trip.details_json | safe }}'
-                                    onclick="openEditModal(this)">수정</button>
-                            <a href="/expense/delete/{{ trip.trip_id }}?search_month={{ current_month }}" class="btn-action btn-delete" onclick="return confirm('이 출장 건에 포함된 모든 영수증 데이터가 일괄 삭제됩니다. 진행하시겠습니까?')">삭제</a>
+                                    onclick="openEditModal(this)">✏️ 수정</button>
+                            <a href="/expense/delete/{{ trip.trip_id }}?search_month={{ current_month }}" class="btn-action btn-delete" onclick="return confirm('정말 삭제하시겠습니까? 관련 모든 영수증이 삭제됩니다.');">🗑️ 삭제</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -644,34 +648,34 @@
 
     <div id="editModal" class="modal">
         <div class="modal-content">
-            <h3 style="color: #f59e0b; margin-top: 0; border-bottom: 2px solid #f59e0b; padding-bottom: 10px;">✏️ 출장 정산 내역 및 영수증 수정</h3>
-            <form method="POST" action="/expense/edit">
+            <h3 style="margin-top:0; color:#1e3a8a; border-bottom:2px solid #1e3a8a; padding-bottom:10px;">✏️ 출장 정산 내역 및 영수증 수정</h3>
+            <form method="POST" action="/expense/edit_submit">
+                <input type="hidden" id="edit_trip_id" name="trip_id">
                 <input type="hidden" name="search_month" value="{{ current_month }}">
-                <input type="hidden" id="edit_trip_id" name="edit_trip_id">
                 
                 <div class="input-group">
-                    <label>📅 지출 일자</label>
-                    <input type="date" id="edit_date" name="edit_date" required>
+                    <label>지출 일자</label>
+                    <input type="date" id="edit_date" name="date" required>
                 </div>
                 <div class="input-group">
-                    <label>👤 실사용자 이름</label>
-                    <input type="text" id="edit_user_name" name="edit_user_name" required>
+                    <label>사용자 이름</label>
+                    <input type="text" id="edit_user_name" name="user" required>
                 </div>
                 <div class="input-group">
-                    <label>📍 출장지 명칭</label>
-                    <input type="text" id="edit_place" name="edit_place" required>
+                    <label>출장지</label>
+                    <input type="text" id="edit_place" name="place" required>
                 </div>
                 <div class="input-group">
-                    <label>📑 출장 목적 및 내용</label>
-                    <input type="text" id="edit_content" name="edit_content" required>
+                    <label>출장 목적 및 내용</label>
+                    <input type="text" id="edit_content" name="content" required>
                 </div>
                 
-                <h4 style="margin: 20px 0 10px 0; color: #4b5563;">🧾 영수증 상세 내역 수정</h4>
+                <h4 style="margin:20px 0 10px 0; color:#334155; border-bottom:1px solid #e2e8f0; padding-bottom:5px;">🧾 소속 영수증 금액 수정</h4>
                 <div id="edit_receipts_container"></div>
                 
-                <div style="margin-top: 20px; display: flex; gap: 10px;">
-                    <button type="submit" class="submit-btn" style="background: #f59e0b; margin-top:0;">💾 수정사항 저장하기</button>
-                    <button type="button" class="submit-btn" onclick="closeEditModal()" style="background: #6b7280; margin-top:0; width: 150px;">취소</button>
+                <div style="margin-top:20px; text-align:right;">
+                    <button type="button" class="btn-action" onclick="closeEditModal()" style="padding:8px 15px; background:#9ca3af; color:white; border:none; border-radius:4px; font-weight:bold;">취소</button>
+                    <button type="submit" class="btn-action btn-edit" style="padding:8px 15px; border-radius:4px; font-weight:bold;">💾 변경사항 저장</button>
                 </div>
             </form>
         </div>
