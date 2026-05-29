@@ -6,7 +6,7 @@ try:
     from flask import Flask, render_template, request, redirect, url_for, session, send_file
     import openpyxl
 except ModuleNotFoundError:
-    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...")
+    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...") 
     subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "openpyxl"])
     from flask import Flask, render_template, request, redirect, url_for, session, send_file
     import openpyxl
