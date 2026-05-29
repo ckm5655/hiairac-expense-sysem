@@ -218,12 +218,14 @@ def add_expense():
 @app.route('/expense/edit', methods=['POST'])
 def edit_expense():
     if 'user_id' not in session: return redirect(url_for('login_page'))
+    global ALL_EXPENSES
     
-    trip_id = request.form.get('trip_id')
-    expense_date = request.form.get('expense_date')
-    user_name = request.form.get('user_name')
-    place = request.form.get('place')
-    content = request.form.get('content')
+    # 🛠️ 핵심 교정: HTML 모달 폼의 name 속성인 'edit_trip_id'와 완벽 매칭 유도
+    trip_id = request.form.get('edit_trip_id')
+    expense_date = request.form.get('edit_date')
+    user_name = request.form.get('edit_user_name')
+    place = request.form.get('edit_place')
+    content = request.form.get('edit_content')
     search_month = request.form.get('search_month')
     
     sub_ids = request.form.getlist('sub_receipt_ids')
@@ -276,6 +278,7 @@ def reorder_expenses():
             
     save_data()
     return redirect(url_for('index_page', search_month=search_month))
+
 @app.route('/download/cover')
 def download_cover():
     target_team = request.args.get('team')
@@ -285,7 +288,6 @@ def download_cover():
         target_team += "팀"
         
     raw_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
-    # 전체 기초 정렬 (날짜 순)
     raw_data.sort(key=lambda x: x.get('date', ''))
     
     # --- [데이터 가공] 1번 시트용: 건별 일괄 합산 로직 ---
@@ -303,7 +305,8 @@ def download_cover():
             
         aggregated[key]["total"] += amt
         
-        if cat in ["교통비", "주차비"]:
+        # 🛠️ '교통비/주차비', '식비/식대비' 텍스트 불일치 예방 및 통합 매칭 예외처리
+        if cat in ["교통비", "주차비", "교통/주차비"]:
             aggregated[key]["교통비"] += amt
         elif cat in ["식비", "식대비"]:
             aggregated[key]["식대비"] += amt
@@ -311,16 +314,14 @@ def download_cover():
             aggregated[key]["숙박비"] += amt
         elif cat == "차량유지비":
             aggregated[key]["차량유지비"] += amt
-        else: # 소모품비와 기타는 기타로 병합
+        else: 
             aggregated[key]["기타"] += amt
 
     sorted_cover_rows = list(aggregated.values())
     sorted_cover_rows.sort(key=lambda x: x['date'])
     
-    # --- [엑셀 생성 시작] ---
     wb = openpyxl.Workbook()
     
-    # 공통 디자인 자원 설정
     font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
     font_header = Font(name='맑은 고딕', size=11, bold=True)
     font_main = Font(name='맑은 고딕', size=10)
@@ -337,14 +338,10 @@ def download_cover():
     align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
     align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
 
-    # -------------------------------------------------------------
-    # 📑 첫 번째 시트: 정산서 표지 (건별 합산)
-    # -------------------------------------------------------------
     ws1 = wb.active
     ws1.title = f"{target_month[5:7]}월 정산서"
     ws1.views.sheetView[0].showGridLines = True
     
-    # 제목 및 결재란 (H~K열 배치)
     ws1.merge_cells('A1:D2')
     ws1['A1'] = f"{target_month[5:7]}월 개인경비 사용내역"
     ws1['A1'].font = font_title
@@ -368,14 +365,12 @@ def download_cover():
     ws1['A4'].font = font_main
     ws1.row_dimensions[4].height = 24
 
-    # 11개 열 헤더
     headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "차량유지비", "기타", "사용자"]
     for col_idx, h in enumerate(headers1, 1):
         cell = ws1.cell(row=5, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
     ws1.row_dimensions[5].height = 32
 
-    # 데이터 작성
     r_idx = 6
     for idx, row_data in enumerate(sorted_cover_rows, 1):
         ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
@@ -402,7 +397,6 @@ def download_cover():
         ws1.row_dimensions[r_idx].height = 28
         r_idx += 1
 
-    # 표지 합계행
     sum_row_idx = r_idx
     ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
     ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
@@ -420,7 +414,6 @@ def download_cover():
     ws1.cell(row=sum_row_idx, column=11).alignment = align_center
     ws1.row_dimensions[sum_row_idx].height = 30
 
-    # 가지급금 마감 라인 수식 세팅
     budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000, "시운전": 1000000}
     team_budget = budget_map.get(target_team, 0)
     budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
@@ -438,18 +431,14 @@ def download_cover():
     summary_cell.alignment = align_center
     ws1.row_dimensions[r_idx].height = 36
 
-    # 규격 강제 세팅 (A=3, C=30, 나머지=10)
-    widths1 = {1: 3, 2: 10, 3: 30, 4: 10, 5: 10, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
+    widths1 = {1: 5, 2: 10, 3: 30, 4: 15, 5: 12, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
     for col_idx, w in widths1.items():
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
-    # -------------------------------------------------------------
-    # 📑 두 번째 시트: 상세내역 (개별 데이터 나열)
-    # -------------------------------------------------------------
+    # 📑 두 번째 시트: 상세내역
     ws2 = wb.create_sheet(title="상세내역")
     ws2.views.sheetView[0].showGridLines = True
     
-    # 타이틀 영역
     ws2.merge_cells('A1:C2')
     ws2['A1'] = "지출 항목별 상세 증빙내역"
     ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
@@ -458,13 +447,11 @@ def download_cover():
     ws2.row_dimensions[1].height = 20
     ws2.row_dimensions[4].height = 28
     
-    # 상세 내역 헤더 (8개 구조)
     headers2 = ["순번", "사용일자", "성명", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고(영수증확인)"]
     for col_idx, h in enumerate(headers2, 1):
         cell = ws2.cell(row=4, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
         
-    # 개별 로우 순차 기록
     d_idx = 5
     for idx, exp in enumerate(raw_data, 1):
         ws2.cell(row=d_idx, column=1, value=idx).alignment = align_center
@@ -487,7 +474,6 @@ def download_cover():
         ws2.row_dimensions[d_idx].height = 24
         d_idx += 1
         
-    # 상세내역 총계행
     ws2.merge_cells(start_row=d_idx, start_column=1, end_row=d_idx, end_column=6)
     ws2.cell(row=d_idx, column=1, value="총 상세 지출액 합계").font = font_sum
     ws2.cell(row=d_idx, column=1).alignment = align_center
@@ -500,12 +486,10 @@ def download_cover():
     sum_cell2.font = font_sum; sum_cell2.number_format = '#,##0'; sum_cell2.alignment = align_right
     ws2.row_dimensions[d_idx].height = 26
     
-    # 2번 시트용 가독성 너비 배정 (순번=4, 내용=32, 금액=14 등)
-    widths2 = [4, 11, 10, 12, 32, 15, 14, 16]
+    widths2 = [5, 11, 10, 12, 32, 15, 14, 16]
     for i, w in enumerate(widths2, 1):
         ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
-    # --- [파일 반환] ---
     output = BytesIO()
     wb.save(output)
     output.seek(0)
@@ -515,7 +499,6 @@ def download_cover():
 
 @app.route('/backup/download')
 def backup_download():
-    # 현재 서버에 있는 expenses.json을 내 컴퓨터로 다운로드
     if os.path.exists(DATA_FILE):
         return send_file(DATA_FILE, as_attachment=True, download_name="expenses_backup.json")
     return "백업 파일이 없습니다.", 404
@@ -528,10 +511,8 @@ def backup_upload():
     if file.filename == '':
         return "파일을 선택해주세요."
     
-    # 업로드한 파일을 서버의 expenses.json으로 덮어쓰기
     file.save(DATA_FILE)
     
-    # 서버 메모리의 ALL_EXPENSES도 새로고침
     global ALL_EXPENSES
     ALL_EXPENSES = load_data()
     
