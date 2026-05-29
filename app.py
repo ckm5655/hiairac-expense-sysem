@@ -84,7 +84,7 @@ def index_page():
     current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
     user_team = session['team']
     
-    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비", "기타"]
+    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
     
     # 1. 이번 달 기준 팀별/개인별 정산 목록 필터링
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
