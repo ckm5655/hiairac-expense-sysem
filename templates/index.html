@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <title>부서 경비 정산 신청 시스템</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    
     <style>
         body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #fafafa; color: #333; }
         .header-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
@@ -21,12 +23,10 @@
         .stats-card h4 { margin: 0 0 10px 0; color: #475569; font-size: 14px; }
         .stats-card p { margin: 0; font-size: 18px; font-weight: bold; color: #1e3a8a; }
         
-        /* 📉 한눈에 들어오도록 튀어나옴 방지 및 크기 슬림화 수정 */
         .chart-container { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-top: 15px; margin-bottom: 20px; }
         .chart-box { background: #fff; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; height: 210px; min-width: 0; position: relative; }
         .chart-box.wide { grid-column: span 2; height: 180px; min-width: 0; position: relative; }
 
-        /* 화면 창이 아주 작아졌을 때 좌우로 찢어지거나 튀어나오지 않고 아래로 정렬되도록 보정 */
         @media (max-width: 1024px) {
             .chart-container { grid-template-columns: 1fr; }
             .chart-box.wide { grid-column: span 1; }
@@ -367,29 +367,6 @@
                 }
             });
 
-            const rows = document.querySelectorAll('#drag_tbody .drag-row');
-            rows.forEach(row => {
-                if (selectedTeam !== 'ALL') {
-                    const teamCell = row.querySelector('td:nth-child(3)');
-                    if (teamCell && teamCell.innerText.trim() !== selectedTeam) return;
-                }
-                const tds = row.querySelectorAll('td');
-                let dateIdx = (userTeam === "관리자") ? 3 : 2;
-                let amtIdx = (userTeam === "관리자") ? 8 : 7;
-                
-                if (tds[dateIdx] && tds[amtIdx]) {
-                    const dateStr = tds[dateIdx].innerText.trim();
-                    if (dateStr && dateStr.length >= 7) {
-                        const yyyymm = dateStr.substring(0, 7);
-                        if (trendMap[yyyymm] !== undefined) {
-                            if (yyyymm === currentMonthStr) {
-                                trendMap[currentMonthStr] = totalSum; 
-                            }
-                        }
-                    }
-                }
-            });
-
             const lineData = recent6.map(m => trendMap[m.key]);
             const lineLabels = recent6.map(m => m.label);
 
@@ -412,47 +389,48 @@
                 options: {
                     indexAxis: 'y',
                     responsive: true,
-                    maintainAspectRatio: false, // 부모 컨테이너 크기에 반응하도록 변경
+                    maintainAspectRatio: false,
                     plugins: { title: { display: true, font:{size:13, bold:true} } }
                 }
             });
 
+            // [수정된 파이 차트 영역] 
             const pieCtx = document.getElementById('categoryPieChart').getContext('2d');
-        categoryChartObj = new Chart(pieCtx, {
-            type: 'pie',
-            plugins: [ChartDataLabels], // 플러그인 적용
-            data: {
-                labels: ['교통/주차비', '식대비', '소모품비', '차량유지비', '기타'],
-                datasets: [{ 
-                    data: [0, 0, 0, 0, 0], 
-                    backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#9ca3af'] 
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    title: { display: true, text: '항목별 비용 비율', font:{size:13, weight:'bold'} },
-                    datalabels: { // 여기에 퍼센트 표시 설정
-                        color: '#fff',
-                        anchor: 'center',
-                        align: 'center',
-                        formatter: (value, ctx) => {
-                            let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
-                            if (sum === 0) return '';
-                            return ((value * 100) / sum).toFixed(1) + "%";
-                        }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return `${context.label}: ${context.parsed.toLocaleString()}원`;
+            categoryChartObj = new Chart(pieCtx, {
+                type: 'pie',
+                plugins: [ChartDataLabels], // 데이터 라벨 플러그인 등록
+                data: {
+                    labels: ['교통/주차비', '식대비', '소모품비', '차량유지비', '기타'],
+                    datasets: [{ data: [0, 0, 0, 0, 0], backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#9ca3af'] }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { 
+                        title: { display: true, font:{size:13, bold:true} },
+                        // 그래프 위에 퍼센트 항상 띄우기
+                        datalabels: {
+                            color: '#fff',
+                            anchor: 'center',
+                            align: 'center',
+                            font: { weight: 'bold', size: 12 },
+                            formatter: (value, ctx) => {
+                                let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                if (sum === 0) return '';
+                                let percentage = (value * 100 / sum).toFixed(1) + "%";
+                                return percentage;
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.label}: ${context.parsed.toLocaleString()}원`;
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
 
             const lineCtx = document.getElementById('halfYearLineChart').getContext('2d');
             lineChartObj = new Chart(lineCtx, {
@@ -471,7 +449,7 @@
                 },
                 options: {
                     responsive: true,
-                    maintainAspectRatio: false, // 부모 컨테이너 크기에 반응하도록 변경
+                    maintainAspectRatio: false,
                     plugins: {
                         title: { display: true, font:{size:13, bold:true} },
                         tooltip: {
@@ -504,17 +482,19 @@
             }, 100);
         });
     </script>
+
     {% if team == "관리자" %}
-<div style="margin: 20px 0; padding: 10px; border: 1px solid #cbd5e1; background-color: #f8fafc; border-radius: 6px;">
-    <strong style="color: #0f172a;">⚙️ 시스템 데이터 관리 (관리자 전용):</strong>
-    <a href="/backup/download" class="btn-download" style="background: #2563eb; margin-top: 0; padding: 6px 12px; font-size: 13px; text-decoration: none; display: inline-block; border-radius: 4px; color: white;">💾 백업 파일 다운로드</a>
-    
-    <form action="/backup/upload" method="post" enctype="multipart/form-data" style="display:inline; margin-left: 15px;">
-        <input type="file" name="file" accept=".json" style="font-size: 13px;">
-        <button type="submit" class="btn-action btn-edit" style="padding: 6px 12px; background: #d97706;">📂 업로드하여 복구</button>
-    </form>
-</div>
-{% endif %}
+    <div style="margin: 20px 0; padding: 10px; border: 1px solid #cbd5e1; background-color: #f8fafc; border-radius: 6px;">
+        <strong style="color: #0f172a;">⚙️ 시스템 데이터 관리 (관리자 전용):</strong>
+        <a href="/backup/download" class="btn-download" style="background: #2563eb; margin-top: 0; padding: 6px 12px; font-size: 13px; text-decoration: none; display: inline-block; border-radius: 4px; color: white;">💾 백업 파일 다운로드</a>
+        
+        <form action="/backup/upload" method="post" enctype="multipart/form-data" style="display:inline; margin-left: 15px;">
+            <input type="file" name="file" accept=".json" style="font-size: 13px;">
+            <button type="submit" class="btn-action btn-edit" style="padding: 6px 12px; background: #d97706;">📂 업로드하여 복구</button>
+        </form>
+    </div>
+    {% endif %}
+
     <div class="form-box">
         <h3 style="color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-top: 0;">📝 통합 출장 경비 신청 (영수증 일괄 등록)</h3>
         <form method="POST" action="/expense/add">
@@ -632,33 +612,21 @@
                 </tbody>
             </table>
         </form>
-        
-        {% if team == "관리자" %}
-            <div style="margin-top: 15px; background: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1;">
-                <h4 style="margin:0 0 10px 0;">📥 관리자 전용 마감 문서 개별/전체 다운로드</h4>
-                <a href="/download/cover?team=시운전&month={{ current_month }}" class="btn-download" style="background:#3b82f6;">📥 시운전팀 서식 (.xlsx)</a>
-                <a href="/download/cover?team=생산팀&month={{ current_month }}" class="btn-download" style="background:#10b981;">📥 생산팀 서식 (.xlsx)</a>
-                <a href="/download/cover?team=영업팀&month={{ current_month }}" class="btn-download" style="background:#f59e0b;">📥 영업팀 서식 (.xlsx)</a>
-                <a href="/download/cover?team=전장팀&month={{ current_month }}" class="btn-download" style="background:#8b5cf6;">📥 전장팀 서식 (.xlsx)</a>
-            </div>
-        {% else %}
-            <a href="/download/cover?team={{ team }}&month={{ current_month }}" class="btn-download">📥 {{ team }} 정산서 마감 다운로드 (.xlsx)</a>
-        {% endif %}
     </div>
 
     <div id="editModal" class="modal">
         <div class="modal-content">
-            <h3 style="margin-top:0; border-bottom: 2px solid #1e3a8a; padding-bottom:10px; color:#1e3a8a;">✏️ 출장 내역 및 영수증 세부 변경</h3>
-            <form method="POST" action="/expense/edit">
+            <h3 style="margin-top:0; border-bottom:2px solid #f59e0b; padding-bottom:10px; color:#f59e0b;">✏️ 출장 정산 내역 수정</h3>
+            <form action="/expense/edit" method="POST">
                 <input type="hidden" name="search_month" value="{{ current_month }}">
                 <input type="hidden" id="edit_trip_id" name="trip_id">
                 
                 <div class="input-group">
                     <label>지출 일자</label>
-                    <input type="date" id="edit_date" name="expense_date" required>
+                    <input type="date" id="edit_date" name="date" required>
                 </div>
                 <div class="input-group">
-                    <label>사용자 (이름)</label>
+                    <label>사용자 이름</label>
                     <input type="text" id="edit_user_name" name="user_name" required>
                 </div>
                 <div class="input-group">
@@ -669,13 +637,13 @@
                     <label>출장 목적 및 내용</label>
                     <input type="text" id="edit_content" name="content" required>
                 </div>
-                
-                <h4 style="margin: 15px 0 10px 0; color: #334155;">🧾 영수증 항목 변경</h4>
+
+                <h4 style="margin-bottom:10px; border-top:1px solid #eee; pt:15px;">🧾 개별 영수증 금액 수정</h4>
                 <div id="edit_receipts_container"></div>
-                
-                <div style="margin-top: 20px; display: flex; gap: 10px;">
-                    <button type="submit" class="submit-btn" style="margin: 0; width:50%;">💾 수정사항 저장</button>
-                    <button type="button" class="submit-btn" style="margin: 0; background:#94a3b8; width:50%;" onclick="closeEditModal()">취소</button>
+
+                <div style="margin-top:25px; display:flex; gap:10px;">
+                    <button type="submit" class="submit-btn" style="background:#f59e0b; flex:2;">수정 사항 저장하기</button>
+                    <button type="button" class="submit-btn" onclick="closeEditModal()" style="background:#6b7280; flex:1;">취소</button>
                 </div>
             </form>
         </div>
