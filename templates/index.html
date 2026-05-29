@@ -409,28 +409,18 @@
                     plugins: { 
                         title: { display: true, font:{size:13, bold:true} },
                         // 그래프 위에 퍼센트 항상 띄우기
-                    datalabels: {
-                    color: '#fff',
-                    anchor: 'center',
-                    align: 'center',
-                    font: { weight: 'bold', size: 12 },
-                    formatter: (value, ctx) => {
-                        let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
-                        if (sum === 0) return '';
-        
-                        // 1. 현재 항목의 퍼센트 계산
-                        let percentageNum = (value * 100 / sum);
-        
-                        // [핵심] 2. 비율이 5% 미만인 아주 작은 조각은 글자를 표시하지 않음 (겹침 방지)
-                        if (percentageNum < 5) {
-                            return ''; 
-                        }
-                        // 3. 5% 이상인 큼직한 조각들만 퍼센트 노출
-                    return percentageNum.toFixed(1) + "%";
-                        }
-                
-                 },
-                        
+                        datalabels: {
+                            color: '#fff',
+                            anchor: 'center',
+                            align: 'center',
+                            font: { weight: 'bold', size: 12 },
+                            formatter: (value, ctx) => {
+                                let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                if (sum === 0) return '';
+                                let percentage = (value * 100 / sum).toFixed(1) + "%";
+                                return percentage;
+                            }
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
