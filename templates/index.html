@@ -394,7 +394,7 @@
                 }
             });
 
-            // [수정된 파이 차트 영역] 
+            // [수정 및 버그 해결된 파이 차트 생성 영역] 
             const pieCtx = document.getElementById('categoryPieChart').getContext('2d');
             categoryChartObj = new Chart(pieCtx, {
                 type: 'pie',
@@ -408,17 +408,27 @@
                     maintainAspectRatio: false,
                     plugins: { 
                         title: { display: true, font:{size:13, bold:true} },
-                        // 그래프 위에 퍼센트 항상 띄우기
+                        // 그래프 위에 퍼센트 항상 띄우기 설정
                         datalabels: {
-                            color: '#fff',
+                            color: '#fff', // 흰색 글씨로 선명하게 표시
                             anchor: 'center',
                             align: 'center',
                             font: { weight: 'bold', size: 12 },
                             formatter: (value, ctx) => {
+                                // 전체 합계 구하기
                                 let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
                                 if (sum === 0) return '';
-                                let percentage = (value * 100 / sum).toFixed(1) + "%";
-                                return percentage;
+                                
+                                // 현재 조각의 비율 계산
+                                let percentageNum = (value * 100 / sum);
+                                
+                                // [핵심 해결책] 비율이 5%보다 작으면 글자를 숨겨 뭉침/겹침 방지
+                                if (percentageNum < 5) {
+                                    return ''; 
+                                }
+                                
+                                // 5% 이상인 의미 있는 조각들만 퍼센트 노출
+                                return percentageNum.toFixed(1) + "%";
                             }
                         },
                         tooltip: {
