@@ -3,10 +3,9 @@ import json
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'  # 세션 암호화 키
+app.secret_key = 'your_secret_key_here'
 
-# 시스템 테스트용 모의 데이터 (DB 구조에 맞게 연동 가능)
-# 차트가 완벽히 작동하려면 데이터 항목 내 금액(amount)이 '정수(int)'여야 합니다.
+# 기본 더미 데이터
 MOCK_TRIPS = [
     {
         "trip_id": "1",
@@ -22,21 +21,6 @@ MOCK_TRIPS = [
             {"id": "r1", "category": "교통비", "amount": 50000},
             {"id": "r2", "category": "식대비", "amount": 30000}
         ], ensure_ascii=False)
-    },
-    {
-        "trip_id": "2",
-        "order": 2,
-        "team": "생산팀",
-        "date": "2026-05-15",
-        "user": "김철수",
-        "place": "울산공장",
-        "content": "생산 라인 설비 세팅",
-        "items_desc": "숙박비: 70,000원 | 식비: 25,000원",
-        "total_amount": 95000,
-        "details_json": json.dumps([
-            {"id": "r3", "category": "숙박비", "amount": 70000},
-            {"id": "r4", "category": "식비", "amount": 25000}
-        ], ensure_ascii=False)
     }
 ]
 
@@ -44,7 +28,6 @@ CATEGORIES = ["교통비", "교통/주차비", "식대비", "식비", "숙박비
 
 @app.route('/')
 def home():
-    # 세션 테스트용 로그인 처리 (필요시 로그인 시스템 연동)
     session['username'] = '관리자님'
     session['team'] = '관리자' 
     return redirect(url_for('index'))
@@ -54,44 +37,39 @@ def index():
     username = session.get('username', '게스트')
     team = session.get('team', '시운전팀')
     
-    # 상단 날짜 필터 (기본값: 현재 년-월)
     current_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
-    
     month_start_date = f"{current_month}-01"
     month_end_date = f"{current_month}-31"
     
-    # 1. 목록에 노출할 리스트 데이터 필터링 (선택 월 기준)
-    filtered_trips = [t for t in MOCK_TRIPS if t['date'].startswith(current_month)]
-    filtered_trips = sorted(filtered_trips, key=lambda x: x['order'])
+    # 해당 월 데이터만 필터링
+    filtered_trips = [t for t in MOCK_TRIPS if t.get('date', '').startswith(current_month)]
+    filtered_trips = sorted(filtered_trips, key=lambda x: x.get('order', 999))
     
-    # 2. 대시보드 연동용 통합 원본 데이터 가공 (★가장 중요)
     raw_stats_list = []
     dashboard_stats = {'총합': 0, '시운전': 0, '시운전팀': 0, '생산팀': 0, '영업팀': 0, '전장팀': 0}
     
     for t in MOCK_TRIPS:
         try:
-            details = json.loads(t['details_json'])
+            details = json.loads(t.get('details_json', '[]'))
         except:
             details = []
             
         for item in details:
-            # 자바스크립트 차트 엔진이 정상 분류할 수 있도록 규격 동기화
             stat_item = {
-                "date": t['date'],
-                "team": t['team'],
-                "place": t['place'],
+                "date": t.get('date', ''),
+                "team": t.get('team', ''),
+                "place": t.get('place', ''),
                 "category": item.get('category', '기타'),
                 "std_category": item.get('category', '기타'),
                 "amount": int(item.get('amount', 0))
             }
             raw_stats_list.append(stat_item)
             
-            # 선택 월 기준 상단 카드 요약 누적
-            if t['date'].startswith(current_month):
+            if t.get('date', '').startswith(current_month):
                 amt = int(item.get('amount', 0))
                 dashboard_stats['총합'] += amt
                 
-                norm_team = t['team'].replace('팀', '').strip()
+                norm_team = t.get('team', '').replace('팀', '').strip()
                 if norm_team in ['시운전', '시운전팀']:
                     dashboard_stats['시운전'] += amt
                 elif norm_team == '생산':
@@ -101,7 +79,7 @@ def index():
                 elif norm_team == '전장':
                     dashboard_stats['전장팀'] += amt
                     
-                if t['team'] in dashboard_stats:
+                if t.get('team') in dashboard_stats:
                     dashboard_stats[t['team']] += amt
 
     return render_template(
@@ -119,17 +97,17 @@ def index():
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
-    expense_date = request.form.get('expense_date')
-    user_name = request.form.get('user_name')
-    place = request.form.get('place')
-    content = request.form.get('content')
+    # 📌 폼 데이터 수신 변수명 일치 작업 완료 (date, user, place, content)
+    date = request.form.get('date', '')
+    user = request.form.get('user', '')
+    place = request.form.get('place', '')
+    content = request.form.get('content', '')
     search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
     
     user_team = session.get('team', '시운전팀')
     if user_team == "관리자" and request.form.get('target_team'):
         user_team = request.form.get('target_team')
         
-    # HTML 동적 입력 폼의 다중 데이터 수신 (getlist 메서드 사용)
     receipt_categories = request.form.getlist('receipt_category')
     receipt_amounts = request.form.getlist('receipt_amount')
     
@@ -148,8 +126,10 @@ def add_expense():
             rid = f"r_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
             details.append({"id": rid, "category": cat, "amount": amt})
             total_amount += amt
+            # 영수증 내역 텍스트 생성
             desc_parts.append(f"{cat}: {amt:,}원")
             
+    # 누락되었던 items_desc(포함된 영수증 항목) 결합
     items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
     
     new_id = str(len(MOCK_TRIPS) + 1)
@@ -159,11 +139,11 @@ def add_expense():
         "trip_id": new_id,
         "order": new_order,
         "team": user_team,
-        "date": expense_date,
-        "user": user_name,
+        "date": date,
+        "user": user,          # 사용자가 안나오는 현상 해결
         "place": place,
-        "content": content,
-        "items_desc": items_desc,
+        "content": content,    # 출장 목적 및 내용이 안나오는 현상 해결
+        "items_desc": items_desc, # 포함된 영수증 항목이 안나오는 현상 해결
         "total_amount": total_amount,
         "details_json": json.dumps(details, ensure_ascii=False)
     })
@@ -179,7 +159,6 @@ def edit_submit():
     content = request.form.get('content')
     search_month = request.form.get('search_month')
     
-    # 수정 모달 팝업 내부 다중 데이터 처리
     sub_ids = request.form.getlist('sub_receipt_ids')
     sub_categories = request.form.getlist('sub_receipt_categories')
     sub_amounts = request.form.getlist('sub_receipt_amounts')
