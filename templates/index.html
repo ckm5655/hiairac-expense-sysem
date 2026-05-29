@@ -35,7 +35,7 @@
         th, td { border: 1px solid #ddd; padding: 10px; text-align: center; font-size: 14px; }
         th { background: #f3f4f6; font-weight: bold; }
         
-        .drag-row { cursor: move; transition: background 0.2s; }
+        .drag-row { transition: background 0.2s; }
         .drag-row:hover { background: #f0fdf4 !important; }
         .drag-row.dragging { opacity: 0.5; background: #bbf7d0 !important; }
         .drag-handle { font-size: 18px; color: #9ca3af; cursor: move; user-select: none; }
@@ -155,13 +155,13 @@
             if(!tbody) return;
             
             tbody.addEventListener('dragstart', (e) => {
-                if(e.target.classList.contains('drag-row')) {
-                    e.target.classList.add('dragging');
+                if(e.target.closest('.drag-row')) {
+                    e.target.closest('.drag-row').classList.add('dragging');
                 }
             });
             tbody.addEventListener('dragend', (e) => {
-                if(e.target.classList.contains('drag-row')) {
-                    e.target.classList.remove('dragging');
+                if(e.target.closest('.drag-row')) {
+                    e.target.closest('.drag-row').classList.remove('dragging');
                     reCalculateOrders();
                 }
             });
@@ -279,17 +279,21 @@
         function getRecent6Months(targetMonth) {
             let result = [];
             let date = new Date(targetMonth + "-01");
-            
             for (let i = 5; i >= 0; i--) {
                 let d = new Date(date.getFullYear(), date.getMonth() - i, 1);
                 let year = d.getFullYear();
                 let month = String(d.getMonth() + 1).padStart(2, '0');
-                result.push({
-                    key: `${year}-${month}`,
-                    label: `${d.getMonth() + 1}월`
-                });
+                result.push({ key: `${year}-${month}`, label: `${d.getMonth() + 1}월` });
             }
             return result;
+        }
+
+        // '시운전'과 '시운전팀' 명칭 상호 매칭 함수
+        function isSameTeam(t1, t2) {
+            if (!t1 || !t2) return false;
+            let norm1 = t1.replace('팀', '').trim();
+            let norm2 = t2.replace('팀', '').trim();
+            return norm1 === norm2;
         }
 
         function filterTeamStats(selectedTeam, btnElement) {
@@ -298,10 +302,9 @@
                 btnElement.classList.add('active');
             }
 
-            // 부서명 텍스트 유연화 보정 ('시운전'과 '시운전팀' 매칭 보완)
             const filtered = (selectedTeam === 'ALL') 
                 ? rawStatsData 
-                : rawStatsData.filter(x => x.team === selectedTeam || (selectedTeam === '시운전' && x.team === '시운전팀') || (selectedTeam === '시운전팀' && x.team === '시운전'));
+                : rawStatsData.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
 
             let totalSum = 0;
             let categoryMap = {'교통비': 0, '교통/주차비': 0, '식대비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '기타': 0};
@@ -365,16 +368,16 @@
                 }
             });
 
-            // 하단 목록 동적 가시성 필터링 처리 ('시운전' 명칭 양방향 허용)
+            // 🌟 [핵심 수정] 하단 데이터 목록 테이블 행(Row) 필터링 조건 전면 개편 🌟
             const rows = document.querySelectorAll('#drag_tbody .drag-row');
             rows.forEach(row => {
-                const teamCell = row.querySelector('td:nth-child(3)');
+                const teamCell = row.querySelector('.team-badge');
                 if (selectedTeam === 'ALL') {
                     row.style.display = '';
                 } else {
                     if (teamCell) {
                         const tText = teamCell.innerText.trim();
-                        if (tText === selectedTeam || (selectedTeam==='시운전' && tText==='시운전팀') || (selectedTeam==='시운전팀' && tText==='시운전')) {
+                        if (tText === selectedTeam || isSameTeam(tText, selectedTeam)) {
                             row.style.display = '';
                         } else {
                             row.style.display = 'none';
@@ -427,7 +430,6 @@
                             color: '#ffffff',
                             anchor: 'center',
                             align: 'center',
-                            offset: 0,
                             font: { weight: 'bold', size: 12 },
                             formatter: (value, ctx) => {
                                 let datasets = ctx.chart.data.datasets;
@@ -435,7 +437,7 @@
                                 let sum = datasets[0].data.reduce((a, b) => a + b, 0);
                                 if (sum === 0) return '';
                                 let percentageNum = (value * 100 / sum);
-                                if (percentageNum < 5) return ''; 
+                                if (percentageNum < 8) return ''; // 🌟 작은 값 글자 겹침 방지 필터링 기준 강화
                                 return percentageNum.toFixed(1) + "%";
                             }
                         }
@@ -475,22 +477,17 @@
                     scales: {
                         y: {
                             min: 0,
-                            title: { display: true, text: '단위 (원)', font: { size: 11 } },
-                            ticks: {
-                                callback: function(value) { return value.toLocaleString(); }
-                            }
+                            ticks: { callback: function(value) { return value.toLocaleString(); } }
                         }
                     }
                 }
             });
 
             setTimeout(() => {
-                // 부서 로그인 시에도 명칭이 유연하게 걸리도록 강제 동기화
                 let initialTeam = userTeam;
                 if (initialTeam === "관리자") {
                     filterTeamStats('ALL', document.querySelector('.btn-toggle'));
                 } else {
-                    if (initialTeam === "시운전팀") initialTeam = "시운전";
                     filterTeamStats(initialTeam, null);
                 }
             }, 150);
@@ -592,7 +589,7 @@
                     <tr>
                         <th style="width: 40px;">이동</th>
                         <th style="width: 70px;">순번</th>
-                        <th style="width: 80px;">신청부서</th>
+                        <th style="width: 100px;">신청부서</th>
                         <th>지출일자</th>
                         <th>사용자</th>
                         <th>출장지</th>
@@ -610,7 +607,7 @@
                             <input type="hidden" name="trip_ids" value="{{ trip.trip_id }}">
                             <input type="number" name="display_orders" value="{{ trip.order }}" class="order-input" readonly style="width: 45px; text-align: center; border: none; background:transparent; font-weight:bold;">
                         </td>
-                        <td><span style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:12px;">{{ trip.team }}</span></td>
+                        <td><span class="team-badge" style="background:#e2e8f0; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:12px;">{{ trip.team }}</span></td>
                         <td>{{ trip.date }}</td>
                         <td style="font-weight: bold; color: #1e3a8a;">{{ trip.user_name }}</td>
                         <td>{{ trip.place }}</td>
