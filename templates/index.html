@@ -62,7 +62,6 @@
         .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
     </style>
     <script>
-        // 백엔드에서 안전하게 넘겨받은 카테고리 리스트 선언
         const globalCategories = [
             {% for cat in categories %} "{{ cat }}", {% endfor %}
         ];
@@ -302,13 +301,13 @@
                 btnElement.classList.add('active');
             }
 
-            // 1. 선택된 '마감 월'에 속하는 데이터만 1차 정제
+            // 1. 선택 마감 월(currentMonthStr) 기준 1차 필터링
             const monthFiltered = rawStatsData.filter(item => {
                 const fullDate = item.date || "";
                 return fullDate.substring(0, 7) === currentMonthStr;
             });
 
-            // 2. 선택된 '부서 탭'에 따라 2차 정제
+            // 2. 선택한 부서 탭 기준 2차 필터링
             const filtered = (selectedTeam === 'ALL') 
                 ? monthFiltered 
                 : monthFiltered.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
@@ -333,10 +332,8 @@
                 }
             });
 
-            // 선택 월 지출 총합 카드 갱신
             document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
 
-            // 출장지별 가로 바 차트 갱신
             if (placeChartObj) {
                 placeChartObj.data.labels = Object.keys(placeMap).length ? Object.keys(placeMap) : ['데이터 없음'];
                 placeChartObj.data.datasets[0].data = Object.values(placeMap).length ? Object.values(placeMap) : [0];
@@ -344,7 +341,6 @@
                 placeChartObj.update();
             }
 
-            // 원형 파이 차트 갱신 (유사 항목 병합)
             if (categoryChartObj) {
                 categoryChartObj.data.datasets[0].data = [
                     (categoryMap['교통비'] + categoryMap['교통/주차비']), 
@@ -357,7 +353,7 @@
                 categoryChartObj.update();
             }
 
-            // 6개월 추이 선형 차트 데이터 연산 (추이는 월 관계없이 전체 데이터 기반)
+            // 최근 6개월 데이터 처리 (전체 데이터 기반 연산)
             const recent6 = getRecent6Months(currentMonthStr);
             let trendMap = {};
             recent6.forEach(m => trendMap[m.key] = 0);
@@ -376,7 +372,7 @@
                 }
             });
 
-            // 하단 데이터 목록 테이블 실시간 행 필터링
+            // 하단 데이터 목록 실시간 행(Row) 가리기/보이기 처리
             const rows = document.querySelectorAll('#drag_tbody .drag-row');
             rows.forEach(row => {
                 const teamCell = row.querySelector('.team-badge');
