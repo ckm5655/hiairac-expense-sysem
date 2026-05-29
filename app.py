@@ -12,6 +12,7 @@ except ModuleNotFoundError:
     import openpyxl
 
 import datetime
+import calendar  # 💡 월의 마지막 날짜를 구하기 위해 추가
 import os
 import uuid
 import json
@@ -91,11 +92,20 @@ def index_page():
     current_year = current_month[:4]
     user_team = session['team']
     
+    # 🌟 [핵심 수정] 선택한 달의 시작일과 종료일 계산 (HTML에서 달력 제한용)
+    try:
+        year_int = int(current_year)
+        month_int = int(current_month[5:7])
+        last_day = calendar.monthrange(year_int, month_int)[1]
+        month_start_date = f"{current_month}-01"
+        month_end_date = f"{current_month}-{last_day:02d}"
+    except Exception as e:
+        month_start_date = ""
+        month_end_date = ""
+    
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
     
-    # -------------------------------------------------------------
-    # 1. 이번 달 기준 전사 데이터 필터링 (날짜 공백 및 포맷 오차 완벽 방어)
-    # -------------------------------------------------------------
+    # 1. 이번 달 기준 전사 데이터 필터링 (공백 완벽 방어 및 정확한 매칭)
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').strip().startswith(current_month)]
     
     # 일반 팀 로그인 시 해당 부서 데이터만 필터링
@@ -132,12 +142,10 @@ def index_page():
     for t in trips_list:
         t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
         
-    # -------------------------------------------------------------
-    # 2. 📊 대시보드 상단 통계 연산 제어 (완벽 동기화 매칭)
-    # -------------------------------------------------------------
+    # 2. 📊 대시보드 상단 통계 연산 제어
     dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0, "연도누적": 0}
     
-    # [A] 선택 월 지출 총합: 타 월 데이터 혼입 차단을 위해, 검증이 끝난 'month_data' 기준으로만 합산
+    # [A] 선택 월 지출 총합: 검증이 끝난 'month_data' 기준으로만 정확하게 계산
     for x in month_data:
         amt = x.get('amount', 0)
         dashboard_stats["총합"] += amt
@@ -148,7 +156,7 @@ def index_page():
         elif "영업" in t_name: dashboard_stats["영업팀"] += amt
         elif "전장" in t_name: dashboard_stats["전장팀"] += amt
             
-    # [B] 고정 누적액 계산: 해당 연도 데이터만 누적 합산 (일반 팀은 본인 팀만, 관리자는 전사 누적)
+    # [B] 고정 누적액 계산: 해당 연도 데이터만 누적 합산 (부서 권한 분리 유지)
     for x in ALL_EXPENSES:
         x_date = x.get('date', '').strip()
         if x_date.startswith(current_year):
@@ -158,7 +166,7 @@ def index_page():
                 if is_match_team(x.get('team', ''), user_team):
                     dashboard_stats["연도누적"] += x.get('amount', 0)
         
-    # 3. 그래프용 최근 6개월 범위 데이터 수집 로직
+    # 3. 그래프용 데이터 수집
     try:
         base_date = datetime.datetime.strptime(current_month, "%Y-%m")
     except:
@@ -180,7 +188,6 @@ def index_page():
     for x in ALL_EXPENSES:
         data_month = x.get('date', '')[:7]
         if start_month_str <= data_month <= end_month_str:
-            # 일반 유저는 그래프 데이터도 본인 부서 것만 바인딩하도록 보호
             if user_team != "관리자" and not is_match_team(x.get('team', ''), user_team):
                 continue
             raw_stats.append({
@@ -195,6 +202,8 @@ def index_page():
                            username=session['username'], 
                            team=user_team,
                            current_month=current_month,
+                           month_start_date=month_start_date, # 💡 HTML로 전달
+                           month_end_date=month_end_date,     # 💡 HTML로 전달
                            categories=categories_list,
                            trips=trips_list,
                            dashboard_stats=dashboard_stats,
@@ -211,6 +220,12 @@ def add_expense():
             user_team += "팀"
 
     expense_date = request.form.get('expense_date').strip()
+    
+    # 🌟 [서버 측 이중 보안 방어] 혹시나 조작된 날짜가 들어오는 것을 차단
+    search_month = request.form.get('search_month', '').strip()
+    if search_month and not expense_date.startswith(search_month):
+        return f"<script>alert('{search_month}월에 맞는 날짜만 등록할 수 있습니다.'); history.back();</script>"
+
     user_name = request.form.get('user_name')
     place = request.form.get('place')
     content = request.form.get('content')
