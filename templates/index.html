@@ -517,6 +517,10 @@
                     <div class="input-group">
                         <label>지출 일자</label>
                         <input type="date" name="expense_date" required>
+                        <input type="date" name="expense_date" 
+                               min="{{ month_start_date }}" 
+                           max="{{ month_end_date }}" required>
+                    <input type="hidden" name="search_month" value="{{ current_month }}">
                     </div>
                     <div class="input-group">
                         <label>사용자 (이름)</label>
