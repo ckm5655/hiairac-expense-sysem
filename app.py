@@ -87,15 +87,18 @@ def index_page():
     if 'user_id' not in session:
         return redirect(url_for('login_page'))
     
-    current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m'))
-    current_year = current_month[:4] # 💡 현재 선택된 연도 추출 (ex: "2026")
+    current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m')).strip()
+    current_year = current_month[:4]
     user_team = session['team']
     
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
     
-    # 1. 이번 달 기준 데이터 필터링
-    month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
+    # -------------------------------------------------------------
+    # 1. 이번 달 기준 전사 데이터 필터링 (날짜 공백 및 포맷 오차 완벽 방어)
+    # -------------------------------------------------------------
+    month_data = [x for x in ALL_EXPENSES if x.get('date', '').strip().startswith(current_month)]
     
+    # 일반 팀 로그인 시 해당 부서 데이터만 필터링
     if user_team != "관리자":
         month_data = [x for x in month_data if is_match_team(x.get('team', ''), user_team)]
         
@@ -129,26 +132,31 @@ def index_page():
     for t in trips_list:
         t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
         
-    # 2. 📊 대시보드 상단 통계 (선택월 지출총합 및 해당 연도 고정누적 계산)
-    # 총합=선택월 전체 / 고정누적=해당 연도 누적액으로 사용하도록 대시보드 데이터 구조 보정 가능
+    # -------------------------------------------------------------
+    # 2. 📊 대시보드 상단 통계 연산 제어 (완벽 동기화 매칭)
+    # -------------------------------------------------------------
     dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0, "연도누적": 0}
     
-    for x in ALL_EXPENSES:
-        x_date = x.get('date', '')
-        x_amount = x.get('amount', 0)
+    # [A] 선택 월 지출 총합: 타 월 데이터 혼입 차단을 위해, 검증이 끝난 'month_data' 기준으로만 합산
+    for x in month_data:
+        amt = x.get('amount', 0)
+        dashboard_stats["총합"] += amt
         
-        # [A] 선택 월 지출 종합 계산 (정확히 선택된 월만 계산)
-        if x_date.startswith(current_month):
-            dashboard_stats["총합"] += x_amount
-            t_name = x.get('team', '')
-            if "시운전" in t_name: dashboard_stats["시운전"] += x_amount
-            elif "생산" in t_name: dashboard_stats["생산팀"] += x_amount
-            elif "영업" in t_name: dashboard_stats["영업팀"] += x_amount
-            elif "전장" in t_name: dashboard_stats["전장팀"] += x_amount
+        t_name = x.get('team', '')
+        if "시운전" in t_name: dashboard_stats["시운전"] += amt
+        elif "생산" in t_name: dashboard_stats["생산팀"] += amt
+        elif "영업" in t_name: dashboard_stats["영업팀"] += amt
+        elif "전장" in t_name: dashboard_stats["전장팀"] += amt
             
-        # [B] 🌟 [핵심 수정] 고정 누적액 계산 (올해 해당 연도 데이터만 누적합산)
+    # [B] 고정 누적액 계산: 해당 연도 데이터만 누적 합산 (일반 팀은 본인 팀만, 관리자는 전사 누적)
+    for x in ALL_EXPENSES:
+        x_date = x.get('date', '').strip()
         if x_date.startswith(current_year):
-            dashboard_stats["연도누적"] += x_amount
+            if user_team == "관리자":
+                dashboard_stats["연도누적"] += x.get('amount', 0)
+            else:
+                if is_match_team(x.get('team', ''), user_team):
+                    dashboard_stats["연도누적"] += x.get('amount', 0)
         
     # 3. 그래프용 최근 6개월 범위 데이터 수집 로직
     try:
@@ -172,6 +180,9 @@ def index_page():
     for x in ALL_EXPENSES:
         data_month = x.get('date', '')[:7]
         if start_month_str <= data_month <= end_month_str:
+            # 일반 유저는 그래프 데이터도 본인 부서 것만 바인딩하도록 보호
+            if user_team != "관리자" and not is_match_team(x.get('team', ''), user_team):
+                continue
             raw_stats.append({
                 'team': x['team'],
                 'date': x['date'],
@@ -199,7 +210,7 @@ def add_expense():
         if not user_team.endswith('팀') and user_team != "시운전":
             user_team += "팀"
 
-    expense_date = request.form.get('expense_date') # 유저가 폼에서 입력한 날짜 (ex: "2026-04-15")
+    expense_date = request.form.get('expense_date').strip()
     user_name = request.form.get('user_name')
     place = request.form.get('place')
     content = request.form.get('content')
@@ -209,7 +220,6 @@ def add_expense():
     
     trip_id = str(uuid.uuid4())
     
-    # 🌟 [핵심 수정] 폼 입력 날짜 기반으로 해당 월의 기존 정산 순서(order) 파악
     actual_month = expense_date[:7] 
     existing_orders = [x.get('order', 0) for x in ALL_EXPENSES if x.get('date', '').startswith(actual_month)]
     next_order = max(existing_orders) + 1 if existing_orders else 1
@@ -231,7 +241,6 @@ def add_expense():
         ALL_EXPENSES.append(new_item)
     
     save_data()
-    # 🌟 [보완] 데이터를 등록한 '실제 타겟 월'의 화면으로 이동시켜 꼬임 인식을 방지합니다.
     return redirect(url_for('index_page', search_month=actual_month))
 
 @app.route('/expense/edit', methods=['POST'])
@@ -240,11 +249,10 @@ def edit_expense():
     global ALL_EXPENSES
     
     trip_id = request.form.get('edit_trip_id')
-    expense_date = request.form.get('edit_date')
+    expense_date = request.form.get('edit_date').strip()
     user_name = request.form.get('edit_user_name')
     place = request.form.get('edit_place')
     content = request.form.get('edit_content')
-    search_month = request.form.get('search_month')
     
     sub_ids = request.form.getlist('sub_receipt_ids')
     sub_cats = request.form.getlist('sub_receipt_categories')
@@ -267,7 +275,6 @@ def edit_expense():
                 x['amount'] = sub_map[sid]['amount']
                 
     save_data()
-    # 수정 완료 후에도 실제 수정된 날짜의 월로 리다이렉트 처리 유연화
     actual_month = expense_date[:7]
     return redirect(url_for('index_page', search_month=actual_month))
 
