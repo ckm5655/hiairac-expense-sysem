@@ -1,11 +1,10 @@
 <!DOCTYPE html>
-<html lang="ko"> 
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <title>부서 경비 정산 신청 시스템</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-    
     <style>
         body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #fafafa; color: #333; }
         .header-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
@@ -367,6 +366,29 @@
                 }
             });
 
+            const rows = document.querySelectorAll('#drag_tbody .drag-row');
+            rows.forEach(row => {
+                if (selectedTeam !== 'ALL') {
+                    const teamCell = row.querySelector('td:nth-child(3)');
+                    if (teamCell && teamCell.innerText.trim() !== selectedTeam) return;
+                }
+                const tds = row.querySelectorAll('td');
+                let dateIdx = (userTeam === "관리자") ? 3 : 2;
+                let amtIdx = (userTeam === "관리자") ? 8 : 7;
+                
+                if (tds[dateIdx] && tds[amtIdx]) {
+                    const dateStr = tds[dateIdx].innerText.trim();
+                    if (dateStr && dateStr.length >= 7) {
+                        const yyyymm = dateStr.substring(0, 7);
+                        if (trendMap[yyyymm] !== undefined) {
+                            if (yyyymm === currentMonthStr) {
+                                trendMap[currentMonthStr] = totalSum; 
+                            }
+                        }
+                    }
+                }
+            });
+
             const lineData = recent6.map(m => trendMap[m.key]);
             const lineLabels = recent6.map(m => m.label);
 
@@ -394,11 +416,10 @@
                 }
             });
 
-            // [수정 및 버그 해결된 파이 차트 생성 영역] 
             const pieCtx = document.getElementById('categoryPieChart').getContext('2d');
             categoryChartObj = new Chart(pieCtx, {
                 type: 'pie',
-                plugins: [ChartDataLabels], // 데이터 라벨 플러그인 등록
+                plugins: [ChartDataLabels], // 💡 데이터라벨 플러그인 등록
                 data: {
                     labels: ['교통/주차비', '식대비', '소모품비', '차량유지비', '기타'],
                     datasets: [{ data: [0, 0, 0, 0, 0], backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#9ca3af'] }]
@@ -406,36 +427,23 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { 
+                    plugins: {
                         title: { display: true, font:{size:13, bold:true} },
-                        // 그래프 위에 퍼센트 항상 띄우기 설정
+                        // 💡 차트 조각 위에 상시 고정되는 퍼센트(%) 라벨 디자인 설정
                         datalabels: {
-                            color: '#fff', // 흰색 글씨로 선명하게 표시
+                            color: '#ffffff',
                             anchor: 'center',
                             align: 'center',
+                            offset: 0,
                             font: { weight: 'bold', size: 12 },
                             formatter: (value, ctx) => {
-                                // 전체 합계 구하기
-                                let sum = ctx.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                let datasets = ctx.chart.data.datasets;
+                                if (datasets.length === 0) return '';
+                                let sum = datasets[0].data.reduce((a, b) => a + b, 0);
                                 if (sum === 0) return '';
-                                
-                                // 현재 조각의 비율 계산
                                 let percentageNum = (value * 100 / sum);
-                                
-                                // [핵심 해결책] 비율이 5%보다 작으면 글자를 숨겨 뭉침/겹침 방지
-                                if (percentageNum < 5) {
-                                    return ''; 
-                                }
-                                
-                                // 5% 이상인 의미 있는 조각들만 퍼센트 노출
+                                if (percentageNum < 5) return ''; // 5% 미만의 좁은 영역은 글자 숨김 처리로 글자 겹침 방지
                                 return percentageNum.toFixed(1) + "%";
-                            }
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return `${context.label}: ${context.parsed.toLocaleString()}원`;
-                                }
                             }
                         }
                     }
@@ -492,7 +500,7 @@
             }, 100);
         });
     </script>
-
+    
     {% if team == "관리자" %}
     <div style="margin: 20px 0; padding: 10px; border: 1px solid #cbd5e1; background-color: #f8fafc; border-radius: 6px;">
         <strong style="color: #0f172a;">⚙️ 시스템 데이터 관리 (관리자 전용):</strong>
@@ -626,34 +634,34 @@
 
     <div id="editModal" class="modal">
         <div class="modal-content">
-            <h3 style="margin-top:0; border-bottom:2px solid #f59e0b; padding-bottom:10px; color:#f59e0b;">✏️ 출장 정산 내역 수정</h3>
-            <form action="/expense/edit" method="POST">
+            <h3 style="color: #f59e0b; margin-top: 0; border-bottom: 2px solid #f59e0b; padding-bottom: 10px;">✏️ 출장 정산 내역 및 영수증 수정</h3>
+            <form method="POST" action="/expense/edit">
                 <input type="hidden" name="search_month" value="{{ current_month }}">
-                <input type="hidden" id="edit_trip_id" name="trip_id">
+                <input type="hidden" id="edit_trip_id" name="edit_trip_id">
                 
                 <div class="input-group">
-                    <label>지출 일자</label>
-                    <input type="date" id="edit_date" name="date" required>
+                    <label>📅 지출 일자</label>
+                    <input type="date" id="edit_date" name="edit_date" required>
                 </div>
                 <div class="input-group">
-                    <label>사용자 이름</label>
-                    <input type="text" id="edit_user_name" name="user_name" required>
+                    <label>👤 실사용자 이름</label>
+                    <input type="text" id="edit_user_name" name="edit_user_name" required>
                 </div>
                 <div class="input-group">
-                    <label>출장지</label>
-                    <input type="text" id="edit_place" name="place" required>
+                    <label>📍 출장지 명칭</label>
+                    <input type="text" id="edit_place" name="edit_place" required>
                 </div>
                 <div class="input-group">
-                    <label>출장 목적 및 내용</label>
-                    <input type="text" id="edit_content" name="content" required>
+                    <label>📑 출장 목적 및 내용</label>
+                    <input type="text" id="edit_content" name="edit_content" required>
                 </div>
-
-                <h4 style="margin-bottom:10px; border-top:1px solid #eee; pt:15px;">🧾 개별 영수증 금액 수정</h4>
+                
+                <h4 style="margin: 20px 0 10px 0; color: #4b5563;">🧾 영수증 상세 내역 수정</h4>
                 <div id="edit_receipts_container"></div>
-
-                <div style="margin-top:25px; display:flex; gap:10px;">
-                    <button type="submit" class="submit-btn" style="background:#f59e0b; flex:2;">수정 사항 저장하기</button>
-                    <button type="button" class="submit-btn" onclick="closeEditModal()" style="background:#6b7280; flex:1;">취소</button>
+                
+                <div style="margin-top: 20px; display: flex; gap: 10px;">
+                    <button type="submit" class="submit-btn" style="background: #f59e0b; margin-top:0;">💾 수정사항 저장하기</button>
+                    <button type="button" class="submit-btn" onclick="closeEditModal()" style="background: #6b7280; margin-top:0; width: 150px;">취소</button>
                 </div>
             </form>
         </div>
