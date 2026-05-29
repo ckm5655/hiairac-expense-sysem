@@ -1,569 +1,651 @@
-import subprocess
-import sys
-
-# 서버 실행 시 필요한 라이브러리가 없으면 알아서 자동 설치하는 로직
-try:
-    from flask import Flask, render_template, request, redirect, url_for, session, send_file
-    import openpyxl
-except ModuleNotFoundError:
-    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "openpyxl"])
-    from flask import Flask, render_template, request, redirect, url_for, session, send_file
-    import openpyxl
-
-import datetime
-import calendar  # 💡 월의 마지막 날짜를 구하기 위해 추가
-import os
-import uuid
-import json
-from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
-from io import BytesIO
-
-app = Flask(__name__)
-app.secret_key = "trip_unified_advanced_system_2026"
-
-USER_CREDENTIALS = {
-    "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
-    "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
-    "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
-    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
-    "전장": {"password": "1234", "name": "전장", "team": "전장팀"}
-}
-
-ACCOUNT_MAPPING = {
-    "교통비": "512", "주차비": "512", "식비": "512", "식대비": "512",
-    "차량유지비": "522", "운반비": "524", "통신비": "513",
-    "소모품비": "530", "택배비": "524", "수수료": "531", "숙박비": "512", "기타": "533"
-}
-
-DATA_FILE = "expenses.json"
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print("데이터 로딩 실패:", e)
-            return []
-    return []
-
-def save_data():
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(ALL_EXPENSES, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print("데이터 저장 실패:", e)
-
-ALL_EXPENSES = load_data()
-
-# 부서명 불일치 해결을 위한 텍스트 표준화 도우미 함수
-def is_match_team(db_team, target_team):
-    if not db_team or not target_team:
-        return False
-    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
-
-@app.route('/')
-def login_page():
-    return render_template('login.html')
-
-@app.route('/login', methods=['POST'])
-def do_login():
-    uid = request.form.get('username')
-    upass = request.form.get('password')
-    if uid in USER_CREDENTIALS and USER_CREDENTIALS[uid]['password'] == upass:
-        session['user_id'] = uid
-        session['username'] = USER_CREDENTIALS[uid]['name']
-        session['team'] = USER_CREDENTIALS[uid]['team']
-        return redirect(url_for('index_page'))
-    return "<script>alert('로그인 정보가 올바르지 않습니다.'); history.back();</script>"
-
-@app.route('/logout')
-def do_logout():
-    session.clear()
-    return redirect(url_for('login_page'))
-
-@app.route('/index')
-def index_page():
-    if 'user_id' not in session:
-        return redirect(url_for('login_page'))
-    
-    current_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m')).strip()
-    current_year = current_month[:4]
-    user_team = session['team']
-    
-    # 🌟 [핵심 수정] 선택한 달의 시작일과 종료일 계산 (HTML에서 달력 제한용)
-    try:
-        year_int = int(current_year)
-        month_int = int(current_month[5:7])
-        last_day = calendar.monthrange(year_int, month_int)[1]
-        month_start_date = f"{current_month}-01"
-        month_end_date = f"{current_month}-{last_day:02d}"
-    except Exception as e:
-        month_start_date = ""
-        month_end_date = ""
-    
-    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
-    
-    # 1. 이번 달 기준 전사 데이터 필터링 (공백 완벽 방어 및 정확한 매칭)
-    month_data = [x for x in ALL_EXPENSES if x.get('date', '').strip().startswith(current_month)]
-    
-    # 일반 팀 로그인 시 해당 부서 데이터만 필터링
-    if user_team != "관리자":
-        month_data = [x for x in month_data if is_match_team(x.get('team', ''), user_team)]
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>부서 경비 정산 신청 시스템</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #fafafa; color: #333; }
+        .header-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .profile { float: left; font-size: 16px; font-weight: bold; line-height: 40px; }
+        .logout-btn { float: right; padding: 8px 15px; background: #ef4444; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
+        .form-box { background: white; padding: 25px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 30px; }
         
-    month_data.sort(key=lambda x: x.get('order', 999))
-    
-    trips_map = {}
-    for exp in month_data:
-        tid = exp['trip_id']
-        if tid not in trips_map:
-            trips_map[tid] = {
-                'trip_id': tid,
-                'order': exp.get('order', 1),
-                'team': exp.get('team', ''),
-                'date': exp.get('date', ''),
-                'user_name': exp.get('user_name', ''),
-                'place': exp.get('place', ''),
-                'content': exp.get('content', ''),
-                'details': [],
-                'total_amount': 0
-            }
-        trips_map[tid]['details'].append({
-            'id': exp['id'],
-            'category': exp['category'],
-            'amount': exp['amount']
-        })
-        trips_map[tid]['total_amount'] += exp['amount']
-        
-    trips_list = list(trips_map.values())
-    trips_list.sort(key=lambda x: x['order'])
-    
-    for t in trips_list:
-        t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
-        
-    # 2. 📊 대시보드 상단 통계 연산 제어
-    dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0, "연도누적": 0}
-    
-    # [A] 선택 월 지출 총합: 검증이 끝난 'month_data' 기준으로만 정확하게 계산
-    for x in month_data:
-        amt = x.get('amount', 0)
-        dashboard_stats["총합"] += amt
-        
-        t_name = x.get('team', '')
-        if "시운전" in t_name: dashboard_stats["시운전"] += amt
-        elif "생산" in t_name: dashboard_stats["생산팀"] += amt
-        elif "영업" in t_name: dashboard_stats["영업팀"] += amt
-        elif "전장" in t_name: dashboard_stats["전장팀"] += amt
-            
-    # [B] 고정 누적액 계산: 해당 연도 데이터만 누적 합산 (부서 권한 분리 유지)
-    for x in ALL_EXPENSES:
-        x_date = x.get('date', '').strip()
-        if x_date.startswith(current_year):
-            if user_team == "관리자":
-                dashboard_stats["연도누적"] += x.get('amount', 0)
-            else:
-                if is_match_team(x.get('team', ''), user_team):
-                    dashboard_stats["연도누적"] += x.get('amount', 0)
-        
-    # 3. 그래프용 데이터 수집
-    try:
-        base_date = datetime.datetime.strptime(current_month, "%Y-%m")
-    except:
-        try:
-            base_date = datetime.datetime.strptime(current_month + "-01", "%Y-%m-%d")
-        except:
-            base_date = datetime.datetime.today()
+        .btn-toggle-group { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 15px; }
+        .btn-toggle { padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 6px; border: 1px solid #cbd5e1; background: white; cursor: pointer; transition: all 0.2s; color: #475569; }
+        .btn-toggle:hover { background: #f1f5f9; }
+        .btn-toggle.active { background: #1e3a8a; color: white; border-color: #1e3a8a; box-shadow: 0 2px 4px rgba(30,58,138,0.2); }
 
-    start_year = base_date.year
-    start_month_num = base_date.month - 5
-    while start_month_num <= 0:
-        start_month_num += 12
-        start_year -= 1
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .stats-card { background: white; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .stats-card h4 { margin: 0 0 10px 0; color: #475569; font-size: 14px; }
+        .stats-card p { margin: 0; font-size: 18px; font-weight: bold; color: #1e3a8a; }
         
-    start_month_str = f"{start_year}-{start_month_num:02d}"
-    end_month_str = current_month
+        /* 📉 한눈에 들어오도록 튀어나옴 방지 및 크기 슬림화 수정 */
+        .chart-container { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-top: 15px; margin-bottom: 20px; }
+        .chart-box { background: #fff; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; height: 210px; min-width: 0; position: relative; }
+        .chart-box.wide { grid-column: span 2; height: 180px; min-width: 0; position: relative; }
 
-    raw_stats = []
-    for x in ALL_EXPENSES:
-        data_month = x.get('date', '')[:7]
-        if start_month_str <= data_month <= end_month_str:
-            if user_team != "관리자" and not is_match_team(x.get('team', ''), user_team):
-                continue
-            raw_stats.append({
-                'team': x['team'],
-                'date': x['date'],
-                'place': x['place'],
-                'category': x['category'],
-                'amount': x['amount']
-            })
-        
-    return render_template('index.html', 
-                           username=session['username'], 
-                           team=user_team,
-                           current_month=current_month,
-                           month_start_date=month_start_date, # 💡 HTML로 전달
-                           month_end_date=month_end_date,     # 💡 HTML로 전달
-                           categories=categories_list,
-                           trips=trips_list,
-                           dashboard_stats=dashboard_stats,
-                           raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
-
-@app.route('/expense/add', methods=['POST'])
-def add_expense():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    
-    user_team = session['team']
-    if user_team == "관리자":
-        user_team = request.form.get('target_team', '시운전팀')
-        if not user_team.endswith('팀') and user_team != "시운전":
-            user_team += "팀"
-
-    expense_date = request.form.get('expense_date').strip()
-    
-    # 🌟 [서버 측 이중 보안 방어] 혹시나 조작된 날짜가 들어오는 것을 차단
-    search_month = request.form.get('search_month', '').strip()
-    if search_month and not expense_date.startswith(search_month):
-        return f"<script>alert('{search_month}월에 맞는 날짜만 등록할 수 있습니다.'); history.back();</script>"
-
-    user_name = request.form.get('user_name')
-    place = request.form.get('place')
-    content = request.form.get('content')
-    
-    categories = request.form.getlist('receipt_category')
-    amounts = request.form.getlist('receipt_amount')
-    
-    trip_id = str(uuid.uuid4())
-    
-    actual_month = expense_date[:7] 
-    existing_orders = [x.get('order', 0) for x in ALL_EXPENSES if x.get('date', '').startswith(actual_month)]
-    next_order = max(existing_orders) + 1 if existing_orders else 1
-    
-    for cat, amt in zip(categories, amounts):
-        if not cat or not amt: continue
-        new_item = {
-            "id": str(uuid.uuid4()),
-            "trip_id": trip_id,
-            "order": next_order,
-            "team": user_team,
-            "date": expense_date,
-            "user_name": user_name,
-            "place": place,
-            "content": content,
-            "category": cat,
-            "amount": int(amt)
+        /* 화면 창이 아주 작아졌을 때 좌우로 찢어지거나 튀어나오지 않고 아래로 정렬되도록 보정 */
+        @media (max-width: 1024px) {
+            .chart-container { grid-template-columns: 1fr; }
+            .chart-box.wide { grid-column: span 1; }
         }
-        ALL_EXPENSES.append(new_item)
-    
-    save_data()
-    return redirect(url_for('index_page', search_month=actual_month))
 
-@app.route('/expense/edit', methods=['POST'])
-def edit_expense():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    global ALL_EXPENSES
-    
-    trip_id = request.form.get('edit_trip_id')
-    expense_date = request.form.get('edit_date').strip()
-    user_name = request.form.get('edit_user_name')
-    place = request.form.get('edit_place')
-    content = request.form.get('edit_content')
-    
-    sub_ids = request.form.getlist('sub_receipt_ids')
-    sub_cats = request.form.getlist('sub_receipt_categories')
-    sub_amts = request.form.getlist('sub_receipt_amounts')
-    
-    sub_map = {}
-    for sid, scat, samt in zip(sub_ids, sub_cats, sub_amts):
-        sub_map[sid] = {'category': scat, 'amount': int(samt)}
+        table { width: 100%; border-collapse: collapse; background: white; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; font-size: 14px; }
+        th { background: #f3f4f6; font-weight: bold; }
         
-    for x in ALL_EXPENSES:
-        if x['trip_id'] == trip_id:
-            x['date'] = expense_date
-            x['user_name'] = user_name
-            x['place'] = place
-            x['content'] = content
-            
-            sid = x['id']
-            if sid in sub_map:
-                x['category'] = sub_map[sid]['category']
-                x['amount'] = sub_map[sid]['amount']
-                
-    save_data()
-    actual_month = expense_date[:7]
-    return redirect(url_for('index_page', search_month=actual_month))
+        .drag-row { cursor: move; transition: background 0.2s; }
+        .drag-row:hover { background: #f0fdf4 !important; }
+        .drag-row.dragging { opacity: 0.5; background: #bbf7d0 !important; }
+        .drag-handle { font-size: 18px; color: #9ca3af; cursor: move; user-select: none; }
 
-@app.route('/expense/delete/<trip_id>')
-def delete_expense(trip_id):
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    global ALL_EXPENSES
-    search_month = request.args.get('search_month')
-    
-    ALL_EXPENSES = [x for x in ALL_EXPENSES if x['trip_id'] != trip_id]
-    
-    save_data()
-    return redirect(url_for('index_page', search_month=search_month))
-
-@app.route('/expense/reorder', methods=['POST'])
-def reorder_expenses():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    
-    trip_ids = request.form.getlist('trip_ids')
-    search_month = request.form.get('search_month')
-    
-    order_map = {tid: idx + 1 for idx, tid in enumerate(trip_ids)}
-    
-    for x in ALL_EXPENSES:
-        tid = x['trip_id']
-        if tid in order_map:
-            x['order'] = order_map[tid]
-            
-    save_data()
-    return redirect(url_for('index_page', search_month=search_month))
-
-@app.route('/download/cover')
-def download_cover():
-    target_team = request.args.get('team', 'ALL')
-    target_month = request.args.get('month', datetime.date.today().strftime('%Y-%m'))
-    
-    if target_team == 'ALL':
-        raw_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(target_month)]
-        display_team_title = "전사 통합"
-    else:
-        raw_data = [x for x in ALL_EXPENSES if is_match_team(x.get('team', ''), target_team) and x.get('date', '').startswith(target_month)]
-        display_team_title = target_team
-        if not display_team_title.endswith('팀') and display_team_title != "시운전":
-            display_team_title += "팀"
-
-    raw_data.sort(key=lambda x: (x.get('order', 999), x.get('date', '')))
-    
-    aggregated = {}
-    for exp in raw_data:
-        key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''), exp.get('team', ''))
-        amt = exp.get('amount', 0)
-        cat = exp.get('category', '기타')
+        .btn-download { display: inline-block; padding: 10px 20px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px; margin-right: 10px; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 13px; color: #4b5563; }
+        .input-group input, .input-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
         
-        if key not in aggregated:
-            aggregated[key] = {
-                "date": key[0], "content": key[1], "place": key[2], "user_name": key[3], "team": key[4],
-                "total": 0, "교통비": 0, "식대비": 0, "숙박비": 0, "차량유지비": 0, "기타": 0
+        .receipt-table-header { display: grid; grid-template-columns: 2fr 2fr 0.5fr; gap: 15px; font-weight: bold; text-align: center; margin-bottom: 8px; background: #f3f4f6; padding: 10px; border-radius: 4px; border: 1px solid #ddd; }
+        .receipt-entry-row { display: grid; grid-template-columns: 2fr 2fr 0.5fr; gap: 15px; margin-bottom: 10px; padding: 5px 10px; background: #fff; align-items: center; }
+        
+        .btn-add-receipt { padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 14px; margin-bottom: 20px; }
+        .btn-remove-receipt { background: #ef4444; color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
+        .submit-btn { padding: 14px 25px; background: #1e3a8a; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; }
+        
+        .btn-action { padding: 4px 8px; font-size: 12px; font-weight: bold; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; }
+        .btn-edit { background: #f59e0b; color: white; border: none; }
+        .btn-delete { background: #dc2626; color: white; border: none; }
+        .btn-order { background: #4b5563; color: white; border: none; padding: 5px 10px; font-size: 13px; border-radius: 4px; cursor: pointer; }
+        
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); overflow-y: auto; }
+        .modal-content { background: white; margin: 5% auto; padding: 25px; border-radius: 8px; width: 550px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+        .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
+    </style>
+    <script>
+        const globalCategories = [
+            {% for cat in categories %} "{{ cat }}", {% endfor %}
+        ];
+
+        function addReceiptLine() {
+            const container = document.getElementById('receipt_container');
+            if(!container) return;
+            let categoryOptions = '';
+            globalCategories.forEach(cat => {
+                categoryOptions += `<option value="${cat}">${cat}</option>`;
+            });
+
+            const newRow = document.createElement('div');
+            newRow.className = 'receipt-entry-row';
+            newRow.innerHTML = `
+                <div>
+                    <select name="receipt_category" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <option value="">-- 경비 구분 선택 --</option>
+                        ${categoryOptions}
+                    </select>
+                </div>
+                <div>
+                    <input type="number" name="receipt_amount" min="0" placeholder="영수증 금액 입력 (원)" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div style="text-align: center;">
+                    <button type="button" class="btn-remove-receipt" onclick="removeReceiptLine(this)">🗑️ 삭제</button>
+                </div>
+            `;
+            container.appendChild(newRow);
+        }
+
+        function removeReceiptLine(button) {
+            button.closest('.receipt-entry-row').remove();
+        }
+
+        function openEditModal(btnElement) {
+            const tripId = btnElement.getAttribute('data-trip-id');
+            const date = btnElement.getAttribute('data-date');
+            const user = btnElement.getAttribute('data-user');
+            const place = btnElement.getAttribute('data-place');
+            const content = btnElement.getAttribute('data-content');
+            const detailsJson = btnElement.getAttribute('data-details');
+            
+            document.getElementById('edit_trip_id').value = tripId;
+            document.getElementById('edit_date').value = date;
+            document.getElementById('edit_user_name').value = user;
+            document.getElementById('edit_place').value = place;
+            document.getElementById('edit_content').value = content;
+            
+            const dynamicContainer = document.getElementById('edit_receipts_container');
+            dynamicContainer.innerHTML = ''; 
+            
+            try {
+                const details = JSON.parse(detailsJson);
+                details.forEach((item) => {
+                    let catOptions = '';
+                    globalCategories.forEach(cat => {
+                        const selected = (cat === item.category) ? 'selected' : '';
+                        catOptions += `<option value="${cat}" ${selected}>${cat}</option>`;
+                    });
+
+                    const div = document.createElement('div');
+                    div.className = 'modal-receipt-row';
+                    div.innerHTML = `
+                        <input type="hidden" name="sub_receipt_ids" value="${item.id}">
+                        <div>
+                            <label style="font-size:11px; color:#6b7280; font-weight:bold;">경비 구분</label>
+                            <select name="sub_receipt_categories" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;">
+                                ${catOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; color:#6b7280; font-weight:bold;">금액 (원)</label>
+                            <input type="number" name="sub_receipt_amounts" value="${item.amount}" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;" required>
+                        </div>
+                    `;
+                    dynamicContainer.appendChild(div);
+                });
+            } catch (e) {
+                console.error("데이터 파싱 오류:", e);
             }
+            document.getElementById('editModal').style.display = 'block';
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const tbody = document.getElementById('drag_tbody');
+            if(!tbody) return;
             
-        aggregated[key]["total"] += amt
-        
-        if cat in ["교통비", "주차비", "교통/주차비"]:
-            aggregated[key]["교통비"] += amt
-        elif cat in ["식비", "식대비"]:
-            aggregated[key]["식대비"] += amt
-        elif cat == "숙박비":
-            aggregated[key]["숙박비"] += amt
-        elif cat == "차량유지비":
-            aggregated[key]["차량유지비"] += amt
-        else: 
-            aggregated[key]["기타"] += amt
+            tbody.addEventListener('dragstart', (e) => {
+                if(e.target.classList.contains('drag-row')) {
+                    e.target.classList.add('dragging');
+                }
+            });
+            tbody.addEventListener('dragend', (e) => {
+                if(e.target.classList.contains('drag-row')) {
+                    e.target.classList.remove('dragging');
+                    reCalculateOrders();
+                }
+            });
+            tbody.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const draggingRow = tbody.querySelector('.dragging');
+                if(!draggingRow) return;
+                
+                const siblings = [...tbody.querySelectorAll('.drag-row:not(.dragging)')];
+                const nextSibling = siblings.find(sibling => {
+                    const box = sibling.getBoundingClientRect();
+                    return e.clientY <= box.top + box.height / 2;
+                });
+                
+                if(nextSibling) {
+                    tbody.insertBefore(draggingRow, nextSibling);
+                } else {
+                    tbody.appendChild(draggingRow);
+                }
+            });
+            function reCalculateOrders() {
+                const rows = tbody.querySelectorAll('.drag-row');
+                rows.forEach((row, index) => {
+                    const orderInput = row.querySelector('.order-input');
+                    if(orderInput) orderInput.value = index + 1;
+                });
+            }
+        });
+    </script>
+</head>
+<body onload="addReceiptLine()">
+    <div class="header-container" style="overflow: hidden;">
+        <div class="profile">👑 <strong>{{ username }}</strong> 님 [권한 등급: <span style="color:#1e3a8a;">{{ team }}</span>]</div>
+        <a href="/logout" class="logout-btn">로그아웃</a>
+    </div>
 
-    sorted_cover_rows = list(aggregated.values())
-    
-    wb = openpyxl.Workbook()
-    
-    font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
-    font_header = Font(name='맑은 고딕', size=11, bold=True)
-    font_main = Font(name='맑은 고딕', size=10)
-    font_sum = Font(name='맑은 고딕', size=11, bold=True)
-    
-    thin_border = Border(
-        left=Side(style='thin', color='A0AEC0'), right=Side(style='thin', color='A0AEC0'),
-        top=Side(style='thin', color='A0AEC0'), bottom=Side(style='thin', color='A0AEC0')
-    )
-    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
-    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
-    
-    align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
-    align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
-    align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
+    <div class="form-box" style="background: #eef2f6;">
+        <form method="GET" action="/index">
+            <label style="font-weight: bold; margin-right: 10px;">📅 마감 월 선택 조회:</label>
+            <input type="month" name="search_month" value="{{ current_month }}" onchange="this.form.submit()" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+        </form>
+    </div>
 
-    ws1 = wb.active
-    ws1.title = f"{target_month[5:7]}월 정산서"
-    ws1.views.sheetView[0].showGridLines = True
-    
-    ws1.merge_cells('A1:D2')
-    ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
-    ws1['A1'].font = font_title
-    ws1['A1'].alignment = Alignment(horizontal='left', vertical='center')
+    <div class="form-box" style="background: #f8fafc; border: 1px solid #cbd5e1;">
+        {% if team == "관리자" %}
+        <h3 style="color: #0f172a; margin-top:0; border-bottom: 2px solid #0f172a; padding-bottom:10px;">📊 {{ current_month }} 전사 부서/출장지 통합 대시보드</h3>
+        <div class="btn-toggle-group">
+            <button type="button" class="btn-toggle active" onclick="filterTeamStats('ALL', this)">🌐 전사 전체보기</button>
+            <button type="button" class="btn-toggle" onclick="filterTeamStats('시운전', this)">🛠️ 시운전팀</button>
+            <button type="button" class="btn-toggle" onclick="filterTeamStats('생산팀', this)">⚙️ 생산팀</button>
+            <button type="button" class="btn-toggle" onclick="filterTeamStats('영업팀', this)">💼 영업팀</button>
+            <button type="button" class="btn-toggle" onclick="filterTeamStats('전장팀', this)">🏭 전장팀</button>
+        </div>
+        {% else %}
+        <h3 style="color: #0f172a; margin-top:0; border-bottom: 2px solid #0f172a; padding-bottom:10px;">📊 {{ current_month }} {{ team }} 경비 현황 대시보드</h3>
+        {% endif %}
 
-    approve_headers = ["작성", "검토", "검토", "승인"]
-    for i, h in enumerate(approve_headers):
-        col_idx = 8 + i
-        cell = ws1.cell(row=1, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-        cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
-        ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
-        for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
-        
-    ws1.row_dimensions[1].height = 24
-    ws1.row_dimensions[2].height = 24
-    ws1.row_dimensions[3].height = 24
-
-    ws1.merge_cells('A4:D4')
-    ws1['A4'] = f"작성일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
-    ws1['A4'].font = font_main
-    ws1.row_dimensions[4].height = 24
-
-    headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "차량유지비", "기타", "사용자"]
-    for col_idx, h in enumerate(headers1, 1):
-        cell = ws1.cell(row=5, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws1.row_dimensions[5].height = 32
-
-    r_idx = 6
-    for idx, row_data in enumerate(sorted_cover_rows, 1):
-        ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
-        ws1.cell(row=r_idx, column=2, value=row_data['date'][5:]).alignment = align_center
-        display_content = f"[{row_data['team']}] {row_data['content']}" if target_team == 'ALL' else row_data['content']
-        ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
-        ws1.cell(row=r_idx, column=4, value=row_data['place']).alignment = align_center
-        
-        t_cell = ws1.cell(row=r_idx, column=5, value=row_data['total'])
-        t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
-        
-        categories_keys = ["교통비", "식대비", "숙박비", "차량유지비", "기타"]
-        for c_idx, cat_name in enumerate(categories_keys, 6):
-            v_cell = ws1.cell(row=r_idx, column=c_idx)
-            v_cell.value = row_data[cat_name] if row_data[cat_name] > 0 else ""
-            v_cell.number_format = '#,##0'; v_cell.alignment = align_right
+        <div class="stats-grid">
+            <div class="stats-card" style="border-top: 4px solid #1e3a8a; background: #f0f4ff;">
+                <h4>선택 월 지출 총합</h4>
+                <p id="target_total_display" style="color:#1e3a8a; font-size:22px;">{{ "{:,.0f}".format(dashboard_stats.get('총합', 0)) }}원</p>
+            </div>
             
-        ws1.cell(row=r_idx, column=11, value=row_data['user_name']).alignment = align_center
-        
-        for c in range(1, 12):
-            cell = ws1.cell(row=r_idx, column=c)
-            if c != 5: cell.font = font_main
-            cell.border = thin_border
+            {% if team == "관리자" or team == "시운전" %}
+            <div class="stats-card" style="border-top: 4px solid #3b82f6;">
+                <h4>시운전팀 고정누적</h4>
+                <p>{{ "{:,.0f}".format(dashboard_stats.get('시운전', 0)) }}원</p>
+            </div>
+            {% endif %}
             
-        ws1.row_dimensions[r_idx].height = 28
-        r_idx += 1
-
-    sum_row_idx = r_idx
-    ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
-    ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
-    ws1.cell(row=sum_row_idx, column=1).alignment = align_center
-    
-    for c in range(1, 12):
-        cell = ws1.cell(row=sum_row_idx, column=c)
-        cell.border = thin_border; cell.fill = fill_sum
-    
-    for c in range(5, 11):
-        col_letter = openpyxl.utils.get_column_letter(c)
-        sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
-        sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
-        
-    ws1.cell(row=sum_row_idx, column=11).alignment = align_center
-    ws1.row_dimensions[sum_row_idx].height = 30
-
-    budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000, "시운전": 1000000}
-    team_budget = budget_map.get(display_team_title, 0) if target_team != 'ALL' else 0
-    budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
-    
-    r_idx += 2
-    ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=11)
-    summary_cell = ws1.cell(row=r_idx, column=1)
-    
-    if team_budget > 0:
-        summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
-    else:
-        summary_cell.value = f'="전체 통합 경비 합계액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ] 원"'
-        
-    summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
-    summary_cell.alignment = align_center
-    ws1.row_dimensions[r_idx].height = 36
-
-    widths1 = {1: 5, 2: 10, 3: 35, 4: 15, 5: 12, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
-    for col_idx, w in widths1.items():
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
-
-    # 두 번째 시트: 상세내역
-    ws2 = wb.create_sheet(title="상세내역")
-    ws2.views.sheetView[0].showGridLines = True
-    
-    ws2.merge_cells('A1:C2')
-    ws2['A1'] = "지출 항목별 상세 증빙내역"
-    ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
-    ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
-    
-    ws2.row_dimensions[1].height = 20
-    ws2.row_dimensions[4].height = 28
-    
-    headers2 = ["순번", "사용일자", "부서명", "성명", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
-    for col_idx, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=4, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-        
-    d_idx = 5
-    for idx, exp in enumerate(raw_data, 1):
-        ws2.cell(row=d_idx, column=1, value=idx).alignment = align_center
-        ws2.cell(row=d_idx, column=2, value=exp.get('date', '')[5:]).alignment = align_center
-        ws2.cell(row=d_idx, column=3, value=exp.get('team', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=4, value=exp.get('user_name', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=5, value=exp.get('category', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=6, value=exp.get('content', '')).alignment = align_left
-        ws2.cell(row=d_idx, column=7, value=exp.get('place', '')).alignment = align_center
-        
-        amt_cell = ws2.cell(row=d_idx, column=8, value=exp.get('amount', 0))
-        amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
-        
-        ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
-        
-        for c in range(1, 10):
-            cell = ws2.cell(row=d_idx, column=c)
-            cell.border = thin_border
-            cell.font = font_main
+            {% if team == "관리자" or team == "생산팀" %}
+            <div class="stats-card" style="border-top: 4px solid #10b981;">
+                <h4>생산팀 고정누적</h4>
+                <p>{{ "{:,.0f}".format(dashboard_stats.get('생산팀', 0)) }}원</p>
+            </div>
+            {% endif %}
             
-        ws2.row_dimensions[d_idx].height = 24
-        d_idx += 1
+            {% if team == "관리자" or team == "영업팀" %}
+            <div class="stats-card" style="border-top: 4px solid #f59e0b;">
+                <h4>영업팀 고정누적</h4>
+                <p>{{ "{:,.0f}".format(dashboard_stats.get('영업팀', 0)) }}원</p>
+            </div>
+            {% endif %}
+
+            {% if team == "관리자" or team == "전장팀" %}
+            <div class="stats-card" style="border-top: 4px solid #8b5cf6;">
+                <h4>전장팀 고정누적</h4>
+                 <p>{{ "{:,.0f}".format(dashboard_stats.get('전장팀', 0)) }}원</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-box">
+                <canvas id="placeBarChart"></canvas>
+            </div>
+            <div class="chart-box">
+                <canvas id="categoryPieChart"></canvas>
+            </div>
+            <div class="chart-box wide">
+                <canvas id="halfYearLineChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const rawStatsData = {{ raw_stats_json | safe }};
+        const userTeam = "{{ team }}";
+        const currentMonthStr = "{{ current_month }}"; 
         
-    ws2.merge_cells(start_row=d_idx, start_column=1, end_row=d_idx, end_column=7)
-    ws2.cell(row=d_idx, column=1, value="총 상세 지출액 합계").font = font_sum
-    ws2.cell(row=d_idx, column=1).alignment = align_center
-    
-    for c in range(1, 10):
-        cell = ws2.cell(row=d_idx, column=c)
-        cell.border = thin_border; cell.fill = fill_sum
+        let placeChartObj = null;
+        let categoryChartObj = null;
+        let lineChartObj = null;
+
+        function getRecent6Months(targetMonth) {
+            let result = [];
+            let date = new Date(targetMonth + "-01");
+            
+            for (let i = 5; i >= 0; i--) {
+                let d = new Date(date.getFullYear(), date.getMonth() - i, 1);
+                let year = d.getFullYear();
+                let month = String(d.getMonth() + 1).padStart(2, '0');
+                result.push({
+                    key: `${year}-${month}`,
+                    label: `${d.getMonth() + 1}월`
+                });
+            }
+            return result;
+        }
+
+        function filterTeamStats(selectedTeam, btnElement) {
+            if (btnElement) {
+                document.querySelectorAll('.btn-toggle').forEach(btn => btn.classList.remove('active'));
+                btnElement.classList.add('active');
+            }
+
+            const filtered = (selectedTeam === 'ALL') 
+                ? rawStatsData 
+                : rawStatsData.filter(x => x.team === selectedTeam);
+
+            let totalSum = 0;
+            let categoryMap = {'교통비': 0, '식대비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '기타': 0};
+            let placeMap = {};
+
+            filtered.forEach(item => {
+                let rawAmount = item.amount || item.total_amount || 0;
+                if (typeof rawAmount === 'string') {
+                    rawAmount = parseInt(rawAmount.replace(/[^0-9]/g, '')) || 0;
+                }
+                totalSum += rawAmount;
+
+                const cat = item.std_category || item.category;
+                if (categoryMap[cat] !== undefined) {
+                    categoryMap[cat] += rawAmount;
+                } else {
+                    categoryMap['기타'] += rawAmount;
+                }
+
+                if (item.place) {
+                    placeMap[item.place] = (placeMap[item.place] || 0) + rawAmount;
+                }
+            });
+
+            document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
+
+            if (placeChartObj) {
+                placeChartObj.data.labels = Object.keys(placeMap).length ? Object.keys(placeMap) : ['데이터 없음'];
+                placeChartObj.data.datasets[0].data = Object.values(placeMap).length ? Object.values(placeMap) : [0];
+                placeChartObj.options.plugins.title.text = `📍 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 출장지별 지출 순위`;
+                placeChartObj.update();
+            }
+
+            if (categoryChartObj) {
+                categoryChartObj.data.datasets[0].data = [
+                    categoryMap['교통비'], 
+                    (categoryMap['식대비'] + categoryMap['식비']), 
+                    categoryMap['소모품비'], 
+                    categoryMap['차량유지비'], 
+                    categoryMap['기타']
+                ];
+                categoryChartObj.options.plugins.title.text = `🧾 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 항목별 비용 비율`;
+                categoryChartObj.update();
+            }
+
+            const recent6 = getRecent6Months(currentMonthStr);
+            let trendMap = {};
+            recent6.forEach(m => trendMap[m.key] = 0);
+
+            filtered.forEach(item => {
+                if (selectedTeam === 'ALL' || item.team === selectedTeam) {
+                    const fullDate = item.date || item.expense_date || item.month || "";
+                    if (fullDate.length >= 7) {
+                        const yyyymm = fullDate.substring(0, 7);
+                        if (trendMap[yyyymm] !== undefined) {
+                            let rawAmount = item.amount || item.total_amount || 0;
+                            if (typeof rawAmount === 'string') {
+                                rawAmount = parseInt(rawAmount.replace(/[^0-9]/g, '')) || 0;
+                            }
+                            trendMap[yyyymm] += rawAmount;
+                        }
+                    }
+                }
+            });
+
+            const rows = document.querySelectorAll('#drag_tbody .drag-row');
+            rows.forEach(row => {
+                if (selectedTeam !== 'ALL') {
+                    const teamCell = row.querySelector('td:nth-child(3)');
+                    if (teamCell && teamCell.innerText.trim() !== selectedTeam) return;
+                }
+                const tds = row.querySelectorAll('td');
+                let dateIdx = (userTeam === "관리자") ? 3 : 2;
+                let amtIdx = (userTeam === "관리자") ? 8 : 7;
+                
+                if (tds[dateIdx] && tds[amtIdx]) {
+                    const dateStr = tds[dateIdx].innerText.trim();
+                    if (dateStr && dateStr.length >= 7) {
+                        const yyyymm = dateStr.substring(0, 7);
+                        if (trendMap[yyyymm] !== undefined) {
+                            if (yyyymm === currentMonthStr) {
+                                trendMap[currentMonthStr] = totalSum; 
+                            }
+                        }
+                    }
+                }
+            });
+
+            const lineData = recent6.map(m => trendMap[m.key]);
+            const lineLabels = recent6.map(m => m.label);
+
+            if (lineChartObj) {
+                lineChartObj.data.labels = lineLabels;
+                lineChartObj.data.datasets[0].data = lineData;
+                lineChartObj.options.plugins.title.text = `📈 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 최근 6개월 팀 비용 집계 추이 (단위: 원)`;
+                lineChartObj.update();
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const placeCtx = document.getElementById('placeBarChart').getContext('2d');
+            placeChartObj = new Chart(placeCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{ label: '사용 금액 (원)', data: [], backgroundColor: '#3b82f6', borderWidth: 1 }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false, // 부모 컨테이너 크기에 반응하도록 변경
+                    plugins: { title: { display: true, font:{size:13, bold:true} } }
+                }
+            });
+
+            const pieCtx = document.getElementById('categoryPieChart').getContext('2d');
+            categoryChartObj = new Chart(pieCtx, {
+                type: 'pie',
+                data: {
+                    labels: ['교통/주차비', '식대비', '소모품비', '차량유지비', '기타'],
+                    datasets: [{ data: [0, 0, 0, 0, 0], backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#9ca3af'] }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false, // 부모 컨테이너 크기에 반응하도록 변경
+                    plugins: { title: { display: true, font:{size:13, bold:true} } }
+                }
+            });
+
+            const lineCtx = document.getElementById('halfYearLineChart').getContext('2d');
+            lineChartObj = new Chart(lineCtx, {
+                type: 'line',
+                data: {
+                    labels: [], 
+                    datasets: [{
+                        label: '지출 금액 (원)',
+                        data: [],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.2,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false, // 부모 컨테이너 크기에 반응하도록 변경
+                    plugins: {
+                        title: { display: true, font:{size:13, bold:true} },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let val = context.parsed.y;
+                                    return ' 금액: ' + val.toLocaleString() + ' 원';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            min: 0,
+                            title: { display: true, text: '단위 (원)', font: { size: 11 } },
+                            ticks: {
+                                callback: function(value) { return value.toLocaleString(); }
+                            }
+                        }
+                    }
+                }
+            });
+
+            setTimeout(() => {
+                if (userTeam === "관리자") {
+                    filterTeamStats('ALL', document.querySelector('.btn-toggle'));
+                } else {
+                    filterTeamStats(userTeam, null);
+                }
+            }, 100);
+        });
+    </script>
+
+    <div class="form-box">
+        <h3 style="color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-top: 0;">📝 통합 출장 경비 신청 (영수증 일괄 등록)</h3>
+        <form method="POST" action="/expense/add">
+            <input type="hidden" name="search_month" value="{{ current_month }}">
+            
+            <div style="background: #f8fafc; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 25px;">
+                <h4 style="margin: 0 0 15px 0; color: #334155;">💼 핵심 출장 및 사용자 정보</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1.2fr 1.8fr; gap: 15px;">
+                    <div class="input-group">
+                        <label>지출 일자</label>
+                        <input type="date" name="expense_date" required>
+                    </div>
+                    <div class="input-group">
+                        <label>사용자 (이름)</label>
+                        <input type="text" name="user_name" placeholder="실사용자 이름" required>
+                    </div>
+                    <div class="input-group">
+                        <label>출장지</label>
+                        <input type="text" name="place" placeholder="예: 삼성중공업" required>
+                    </div>
+                    <div class="input-group">
+                        <label>출장 목적 및 내용 (표지 제목)</label>
+                        <input type="text" name="content" placeholder="예: SPOT COOLER 점검 지원" required>
+                    </div>
+                </div>
+                {% if team == "관리자" %}
+                <div style="margin-top:15px; background:#fff3cd; padding:10px; border-radius:4px; border:1px solid #ffeba2;">
+                    <label style="font-weight:bold; font-size:13px;">⚙️ 관리자 전용 대리 등록 권한 -> 대상 팀 선택 : </label>
+                    <select name="target_team" style="padding:5px; width:150px; display:inline-block; margin-left:10px;">
+                        <option value="시운전">시운전</option>
+                        <option value="생산팀">생산팀</option>
+                        <option value="영업팀">영업팀</option>
+                        <option value="전장팀">전장팀</option>
+                    </select>
+                </div>
+                {% endif %}
+            </div>
+            
+            <h4 style="margin: 0 0 10px 0; color: #334155;">🧾 영수증 내역 입력</h4>
+            <div class="receipt-table-header">
+                <div>영수증 경비 구분</div>
+                <div>영수증 금액 (원)</div>
+                <div>관리</div>
+            </div>
+
+            <div id="receipt_container"></div>
+
+            <button type="button" class="btn-add-receipt" onclick="addReceiptLine()">➕ 영수증 입력 항목 추가</button>
+            <button type="submit" class="submit-btn">🧾 상기 모든 영수증 저장 및 제출하기</button>
+        </form>
+    </div>
+
+    <div class="form-box">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3>📊 {{ current_month }} 등록된 출장 정산 목록 
+                {% if team == "관리자" %}<span style="color:#2563eb;">(전사 부서 전체 통합 노출 모드)</span>{% endif %}
+                <span style="font-size:12px; color:#10b981; font-weight:normal;">(💡 드래그로 순서 배치 가능)</span>
+            </h3>
+            <button type="submit" form="orderForm" class="btn-order">🔄 변경된 순번으로 목록 재정렬</button>
+        </div>
         
-    sum_cell2 = ws2.cell(row=d_idx, column=8, value=f"=SUM(H5:H{d_idx-1})")
-    sum_cell2.font = font_sum; sum_cell2.number_format = '#,##0'; sum_cell2.alignment = align_right
-    ws2.row_dimensions[d_idx].height = 26
-    
-    widths2 = [5, 11, 12, 10, 12, 32, 15, 14, 12]
-    for i, w in enumerate(widths2, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        <form id="orderForm" method="POST" action="/expense/reorder">
+            <input type="hidden" name="search_month" value="{{ current_month }}">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 40px;">이동</th>
+                        <th style="width: 70px;">순번</th>
+                        {% if team == "관리자" %}<th style="width: 80px;">신청부서</th>{% endif %}
+                        <th>지출일자</th>
+                        <th>사용자</th>
+                        <th>출장지</th>
+                        <th>출장 목적 및 대표 내용</th>
+                        <th>포함된 영수증 항목</th>
+                        <th>총 금액</th>
+                        <th style="width: 120px;">작업</th>
+                    </tr>
+                </thead>
+                <tbody id="drag_tbody">
+                    {% for trip in trips %}
+                    <tr class="drag-row" draggable="true">
+                        <td class="drag-handle">☰</td>
+                        <td>
+                            <input type="hidden" name="trip_ids" value="{{ trip.trip_id }}">
+                            <input type="number" name="display_orders" value="{{ trip.order }}" class="order-input" readonly style="width: 45px; text-align: center; border: none; background:transparent; font-weight:bold;">
+                        </td>
+                        {% if team == "관리자" %}
+                        <td><span style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:12px;">{{ trip.team }}</span></td>
+                        {% endif %}
+                        <td>{{ trip.date }}</td>
+                        <td style="font-weight: bold; color: #1e3a8a;">{{ trip.user_name }}</td>
+                        <td>{{ trip.place }}</td>
+                        <td style="text-align: left;">{{ trip.content }}</td>
+                        <td style="text-align: left; font-size: 13px; color: #555;">
+                            {% for detail in trip.details %}
+                                <span style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; margin-right:4px; display:inline-block; margin-bottom:2px;">
+                                    {{ detail.category }}: {{ "{:,.0f}".format(detail.amount) }}원
+                                </span>
+                            {% endfor %}
+                        </td>
+                        <td style="text-align: right; font-weight: bold; color:#10b981;">{{ "{:,.0f}".format(trip.total_amount) }}원</td>
+                        <td>
+                            <button type="button" class="btn-action btn-edit" 
+                                    data-trip-id="{{ trip.trip_id }}"
+                                    data-date="{{ trip.date }}"
+                                    data-user="{{ trip.user_name }}"
+                                    data-place="{{ trip.place }}"
+                                    data-content="{{ trip.content }}"
+                                    data-details='{{ trip.details_json | safe }}'
+                                    onclick="openEditModal(this)">수정</button>
+                            <a href="/expense/delete/{{ trip.trip_id }}?search_month={{ current_month }}" class="btn-action btn-delete" onclick="return confirm('이 출장 건에 포함된 모든 영수증 데이터가 일괄 삭제됩니다. 진행하시겠습니까?')">삭제</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </form>
+        
+        {% if team == "관리자" %}
+            <div style="margin-top: 15px; background: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                <h4 style="margin:0 0 10px 0;">📥 관리자 전용 마감 문서 개별/전체 다운로드</h4>
+                <a href="/download/cover?team=시운전&month={{ current_month }}" class="btn-download" style="background:#3b82f6;">📥 시운전팀 서식 (.xlsx)</a>
+                <a href="/download/cover?team=생산팀&month={{ current_month }}" class="btn-download" style="background:#10b981;">📥 생산팀 서식 (.xlsx)</a>
+                <a href="/download/cover?team=영업팀&month={{ current_month }}" class="btn-download" style="background:#f59e0b;">📥 영업팀 서식 (.xlsx)</a>
+                <a href="/download/cover?team=전장팀&month={{ current_month }}" class="btn-download" style="background:#8b5cf6;">📥 전장팀 서식 (.xlsx)</a>
+            </div>
+        {% else %}
+            <a href="/download/cover?team={{ team }}&month={{ current_month }}" class="btn-download">📥 {{ team }} 정산서 마감 다운로드 (.xlsx)</a>
+        {% endif %}
+    </div>
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    filename = f"정산서_{target_team}_{target_month}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route('/backup/download')
-def backup_download():
-    if os.path.exists(DATA_FILE):
-        return send_file(DATA_FILE, as_attachment=True, download_name="expenses_backup.json")
-    return "백업 파일이 없습니다.", 404
-
-@app.route('/backup/upload', methods=['POST'])
-def backup_upload():
-    if 'file' not in request.files:
-        return "파일이 없습니다."
-    file = request.files['file']
-    if file.filename == '':
-        return "파일을 선택해주세요."
-    
-    file.save(DATA_FILE)
-    
-    global ALL_EXPENSES
-    ALL_EXPENSES = load_data()
-    
-    return "<script>alert('데이터 복구가 완료되었습니다!'); location.href='/index';</script>"
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top:0; border-bottom: 2px solid #1e3a8a; padding-bottom:10px; color:#1e3a8a;">✏️ 출장 내역 및 영수증 세부 변경</h3>
+            <form method="POST" action="/expense/edit">
+                <input type="hidden" name="search_month" value="{{ current_month }}">
+                <input type="hidden" id="edit_trip_id" name="trip_id">
+                
+                <div class="input-group">
+                    <label>지출 일자</label>
+                    <input type="date" id="edit_date" name="expense_date" required>
+                </div>
+                <div class="input-group">
+                    <label>사용자 (이름)</label>
+                    <input type="text" id="edit_user_name" name="user_name" required>
+                </div>
+                <div class="input-group">
+                    <label>출장지</label>
+                    <input type="text" id="edit_place" name="place" required>
+                </div>
+                <div class="input-group">
+                    <label>출장 목적 및 내용</label>
+                    <input type="text" id="edit_content" name="content" required>
+                </div>
+                
+                <h4 style="margin: 15px 0 10px 0; color: #334155;">🧾 영수증 항목 변경</h4>
+                <div id="edit_receipts_container"></div>
+                
+                <div style="margin-top: 20px; display: flex; gap: 10px;">
+                    <button type="submit" class="submit-btn" style="margin: 0; width:50%;">💾 수정사항 저장</button>
+                    <button type="button" class="submit-btn" style="margin: 0; background:#94a3b8; width:50%;" onclick="closeEditModal()">취소</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
