@@ -2,67 +2,629 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>관리자 통제 시스템</title>
+    <title>부서 경비 정산 신청 시스템</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
     <style>
-        body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #f8fafc; }
-        .admin-title { color: #0f172a; border-left: 5px solid #1e3a8a; padding-left: 10px; margin-bottom: 25px; }
-        table { width: 100%; border-collapse: collapse; background: white; margin-top: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: center; }
-        th { background: #0f172a; color: white; }
-        .filter-box { background: white; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 20px; }
-        .btn { display: inline-block; padding: 8px 16px; background: #1e3a8a; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; }
+        body { font-family: '맑은 고딕', sans-serif; margin: 30px; background: #fafafa; color: #333; }
+        .header-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .profile { float: left; font-size: 16px; font-weight: bold; line-height: 40px; }
+        .logout-btn { float: right; padding: 8px 15px; background: #ef4444; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
+        .form-box { background: white; padding: 25px; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 30px; }
+        
+        .btn-toggle-group { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 15px; }
+        .btn-toggle { padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 6px; border: 1px solid #cbd5e1; background: white; cursor: pointer; transition: all 0.2s; color: #475569; }
+        .btn-toggle:hover { background: #f1f5f9; }
+        .btn-toggle.active { background: #1e3a8a; color: white; border-color: #1e3a8a; box-shadow: 0 2px 4px rgba(30,58,138,0.2); }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .stats-card { background: white; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .stats-card h4 { margin: 0 0 10px 0; color: #475569; font-size: 14px; }
+        .stats-card p { margin: 0; font-size: 18px; font-weight: bold; color: #1e3a8a; }
+        
+        .chart-container { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-top: 15px; margin-bottom: 20px; }
+        .chart-box { background: #fff; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; height: 210px; min-width: 0; position: relative; }
+        .chart-box.wide { grid-column: span 2; height: 180px; min-width: 0; position: relative; }
+
+        @media (max-width: 1024px) {
+            .chart-container { grid-template-columns: 1fr; }
+            .chart-box.wide { grid-column: span 1; }
+        }
+
+        table { width: 100%; border-collapse: collapse; background: white; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; font-size: 14px; }
+        th { background: #f3f4f6; font-weight: bold; }
+        
+        .drag-row { transition: background 0.2s; }
+        .drag-row:hover { background: #f0fdf4 !important; }
+        .drag-row.dragging { opacity: 0.5; background: #bbf7d0 !important; }
+        .drag-handle { font-size: 18px; color: #9ca3af; cursor: move; user-select: none; }
+
+        .btn-download { display: inline-block; padding: 6px 12px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 13px; margin-right: 5px; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 13px; color: #4b5563; }
+        .input-group input, .input-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        
+        .receipt-table-header { display: grid; grid-template-columns: 2fr 2fr 0.5fr; gap: 15px; font-weight: bold; text-align: center; margin-bottom: 8px; background: #f3f4f6; padding: 10px; border-radius: 4px; border: 1px solid #ddd; }
+        .receipt-entry-row { display: grid; grid-template-columns: 2fr 2fr 0.5fr; gap: 15px; margin-bottom: 10px; padding: 5px 10px; background: #fff; align-items: center; }
+        
+        .btn-add-receipt { padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 14px; margin-bottom: 20px; }
+        .btn-remove-receipt { background: #ef4444; color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
+        .submit-btn { padding: 14px 25px; background: #1e3a8a; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; }
+        
+        .btn-action { padding: 4px 8px; font-size: 12px; font-weight: bold; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; }
+        .btn-edit { background: #f59e0b; color: white; border: none; }
+        .btn-delete { background: #dc2626; color: white; border: none; }
+        .btn-order { background: #4b5563; color: white; padding: 6px 12px; font-size: 13px; border-radius: 4px; cursor: pointer; border: none; font-weight: bold; }
+        
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); overflow-y: auto; }
+        .modal-content { background: white; margin: 5% auto; padding: 25px; border-radius: 8px; width: 550px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+        .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
     </style>
+    <script>
+        const globalCategories = [
+            {% for cat in categories %} "{{ cat }}", {% endfor %}
+        ];
+
+        function addReceiptLine() {
+            const container = document.getElementById('receipt_container');
+            if(!container) return;
+            let categoryOptions = '';
+            globalCategories.forEach(cat => {
+                categoryOptions += `<option value="${cat}">${cat}</option>`;
+            });
+
+            const newRow = document.createElement('div');
+            newRow.className = 'receipt-entry-row';
+            newRow.innerHTML = `
+                <div>
+                    <select name="receipt_category" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <option value="">-- 경비 구분 선택 --</option>
+                        ${categoryOptions}
+                    </select>
+                </div>
+                <div>
+                    <input type="number" name="receipt_amount" min="0" placeholder="영수증 금액 입력 (원)" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div style="text-align: center;">
+                    <button type="button" class="btn-remove-receipt" onclick="removeReceiptLine(this)">🗑️ 삭제</button>
+                </div>
+            `;
+            container.appendChild(newRow);
+        }
+
+        function removeReceiptLine(button) {
+            button.closest('.receipt-entry-row').remove();
+        }
+
+        function openEditModal(btnElement) {
+            const tripId = btnElement.getAttribute('data-trip-id');
+            const date = btnElement.getAttribute('data-date');
+            const user = btnElement.getAttribute('data-user');
+            const place = btnElement.getAttribute('data-place');
+            const content = btnElement.getAttribute('data-content');
+            const detailsJson = btnElement.getAttribute('data-details');
+            
+            document.getElementById('edit_trip_id').value = tripId;
+            document.getElementById('edit_date').value = date;
+            document.getElementById('edit_user_name').value = user;
+            document.getElementById('edit_place').value = place;
+            document.getElementById('edit_content').value = content;
+            
+            const dynamicContainer = document.getElementById('edit_receipts_container');
+            dynamicContainer.innerHTML = ''; 
+            
+            try {
+                const details = JSON.parse(detailsJson);
+                details.forEach((item) => {
+                    let catOptions = '';
+                    globalCategories.forEach(cat => {
+                        const selected = (cat === item.category) ? 'selected' : '';
+                        catOptions += `<option value="${cat}" ${selected}>${cat}</option>`;
+                    });
+
+                    const div = document.createElement('div');
+                    div.className = 'modal-receipt-row';
+                    div.innerHTML = `
+                        <input type="hidden" name="sub_receipt_ids" value="${item.id}">
+                        <div>
+                            <label style="font-size:11px; color:#6b7280; font-weight:bold;">경비 구분</label>
+                            <select name="sub_receipt_categories" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;">
+                                ${catOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; color:#6b7280; font-weight:bold;">금액 (원)</label>
+                            <input type="number" name="sub_receipt_amounts" value="${item.amount}" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;" required>
+                        </div>
+                    `;
+                    dynamicContainer.appendChild(div);
+                });
+            } catch(e) {
+                console.error("상세 정보 파싱 실패:", e);
+            }
+            
+            document.getElementById('editModal').style.display = 'block';
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+
+        function changeSearchMonth(amount) {
+            const cur = document.getElementById('search_month_input').value; // YYYY-MM
+            if(!cur) return;
+            let y = parseInt(cur.split('-')[0]);
+            let m = parseInt(cur.split('-')[1]);
+            m += amount;
+            if (m > 12) { m = 1; y += 1; }
+            if (m < 1) { m = 12; y -= 1; }
+            const nextMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+            location.href = `/index?search_month=${nextMonthStr}`;
+        }
+    </script>
 </head>
 <body>
-    <h2 class="admin-title">📊 [회계/관리자 전용] 부서 경비 통합 통제실</h2>
-    
-    <div class="filter-box">
-        <form method="GET" action="/admin">
-            <label style="font-weight: bold; margin-right: 10px;">팀별 필터링 조회:</label>
-            <select name="team_filter" onchange="this.form.submit()" style="padding: 8px 15px; border-radius: 4px; border: 1px solid #cbd5e1;">
-                <option value="전체" {% if selected_team == '전체' %}selected{% endif %}>전체 부서 보기</option>
-                {% for team in teams %}
-                <option value="{{ team }}" {% if selected_team == team %}selected{% endif %}>{{ team }}</option>
-                {% endfor %}
-            </select>
-            <a href="/logout" style="float: right; color:#ef4444; font-weight: bold; text-decoration: none; line-height: 35px;">로그아웃</a>
+
+    <div class="header-container clearfix">
+        <div class="profile">
+            🚀 <span style="color:#1e3a8a;">{{ username }}</span> 님 환영합니다. (부서: <span style="color:#10b981;">{{ team }}</span>)
+        </div>
+        <a href="/logout" class="logout-btn">로그아웃</a>
+        <div style="clear:both;"></div>
+    </div>
+
+    <div class="btn-toggle-group">
+        <button type="button" class="btn-toggle" onclick="changeSearchMonth(-1)">◀ 이전달</button>
+        <div style="display:flex; align-items:center; background:white; padding:0 15px; border:1px solid #cbd5e1; border-radius:6px; font-weight:bold; color:#1e3a8a;">
+            <input type="month" id="search_month_input" value="{{ current_month }}" onchange="location.href='/index?search_month='+this.value" style="border:none; font-size:15px; font-weight:bold; color:#1e3a8a; cursor:pointer; outline:none;">
+        </div>
+        <button type="button" class="btn-toggle" onclick="changeSearchMonth(1)">다음달 ▶</button>
+        
+        <div style="margin-left:auto; display:flex; gap:5px;">
+            <a href="/download/cover?team={{ team }}&month={{ current_month }}" class="btn-download" style="background:#1e3a8a;">📥 부서 엑셀 다운로드</a>
+            {% if team == "관리자" %}
+                <a href="/download/cover?team=ALL&month={{ current_month }}" class="btn-download" style="background:#047857;">📥 전사 통합 엑셀 다운로드</a>
+                <a href="/backup/download" class="btn-download" style="background:#4b5563;">💾 전체 DB 백업(.json)</a>
+                <button type="button" class="btn-download" style="background:#6b7280; border:none; cursor:pointer;" onclick="document.getElementById('backup_file_input').click()">📂 DB 복구</button>
+                <form id="backup_upload_form" action="/backup/upload" method="post" enctype="multipart/form-data" style="display:none;">
+                    <input type="file" id="backup_file_input" name="file" accept=".json" onchange="if(confirm('정말 이 파일로 전체 데이터를 복구하시겠습니까? 기존 데이터는 덮어씌워집니다.')) document.getElementById('backup_upload_form').submit();">
+                </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stats-card" style="border-top: 4px solid #1e3a8a;">
+            <h4>선택월 지출총합 ({{ current_month[5:7] }}월)</h4>
+            <p id="dashboard-total-view">{{ "{:,.0f}".format(dashboard_stats['총합']) }} 원</p>
+        </div>
+        <div class="stats-card" style="border-top: 4px solid #10b981;">
+            <h4>시운전팀 지출</h4>
+            <p id="dashboard-siunjeon-view">{{ "{:,.0f}".format(dashboard_stats['시운전']) }} 원</p>
+        </div>
+        <div class="stats-card" style="border-top: 4px solid #f59e0b;">
+            <h4>생산/영업/전장 합산</h4>
+            <p id="dashboard-others-view">{{ "{:,.0f}".format(dashboard_stats['생산팀'] + dashboard_stats['영업팀'] + dashboard_stats['전장팀']) }} 원</p>
+        </div>
+        <div class="stats-card" style="border-top: 4px solid #6b7280;">
+            <h4>연도 누적 지출액 ({{ current_month[:4] }}년)</h4>
+            <p>{{ "{:,.0f}".format(dashboard_stats['연도누적']) }} 원</p>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-box">
+            <canvas id="mixChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <canvas id="pieChart"></canvas>
+        </div>
+        <div class="chart-box wide">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </div>
+
+    <div class="form-box">
+        <h3 style="margin-top:0; border-bottom:2px solid #1e3a8a; padding-bottom:10px; color:#1e3a8a;">🧾 경비 지출 신청서 등록 ({{ current_month[5:7] }}월 기준)</h3>
+        <form action="/expense/add" method="post">
+            <input type="hidden" name="search_month" value="{{ current_month }}">
+            
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px; margin-bottom:15px;">
+                {% if team == "관리자" %}
+                <div class="input-group">
+                    <label>대상 부서 선택 (관리자 권한)</label>
+                    <select name="target_team" required>
+                        <option value="시운전팀">시운전팀</option>
+                        <option value="생산팀">생산팀</option>
+                        <option value="영업팀">영업팀</option>
+                        <option value="전장팀">전장팀</option>
+                    </select>
+                </div>
+                {% endif %}
+                <div class="input-group">
+                    <label>일자 선택 ({{ current_month }}월만 가능)</label>
+                    <input type="date" name="expense_date" min="{{ month_start_date }}" max="{{ month_end_date }}" required>
+                </div>
+                <div class="input-group">
+                    <label>사용자 성명</label>
+                    <input type="text" name="user_name" placeholder="예: 홍길동" required>
+                </div>
+                <div class="input-group">
+                    <label>출장지 / 사용처</label>
+                    <input type="text" name="place" placeholder="예: 창원 사업소, 기안물류" required>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>종합 지출 내용 요약 (메인 타이틀)</label>
+                <input type="text" name="content" placeholder="예: OO라인 시운전 출장 경비 정산" required style="font-weight:bold;">
+            </div>
+
+            <div style="margin-top:20px;">
+                <div class="receipt-table-header">
+                    <div>경비 구분 카테고리</div>
+                    <div>영수증 금액 (원)</div>
+                    <div>행 제어</div>
+                </div>
+                <div id="receipt_container">
+                    <div class="receipt-entry-row">
+                        <div>
+                            <select name="receipt_category" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                                <option value="">-- 경비 구분 선택 --</option>
+                                {% for cat in categories %}
+                                <option value="{{ cat }}">{{ cat }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <input type="number" name="receipt_amount" min="0" placeholder="영수증 금액 입력 (원)" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div style="text-align: center;">
+                            <span style="font-size:12px; color:#9ca3af; font-weight:bold;">기본 행</span>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="btn-add-receipt" onclick="addReceiptLine()">➕ 항목 추가하기</button>
+            </div>
+
+            <button type="submit" class="submit-btn">💾 지출 내역 신청 완료 및 저장</button>
         </form>
     </div>
 
-    <div style="background: white; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0;">
-        <h3>📋 현재 필터링된 실시간 데이터 내역 (현재 대상: {{ selected_team }})</h3>
-        
-        <div style="margin-bottom: 15px;">
-            <a href="/download/cover?team={{ selected_team }}" class="btn" style="background:#10b981;">📥 현재 팀 표지시트 출력</a>
-            <a href="/download/convert?team={{ selected_team }}" class="btn" style="background:#4b5563;">📥 ERP 변환파일 출력</a>
+    <div class="form-box" style="overflow-x:auto;">
+        <div style="display:flex; justify-content:between; align-items:center; border-bottom:2px solid #4b5563; padding-bottom:10px; margin-bottom:15px;">
+            <h3 style="margin:0; color:#374151;">📋 {{ current_month[5:7] }}월 경비 정산 내역 및 승인 요청서 리스트</h3>
+            <span style="font-size:12px; color:#6b7280; font-weight:bold; margin-left:auto;">💡 행 왼쪽의 ☰ 아이콘을 드래그하여 순서를 커스텀 배치할 수 있습니다.</span>
         </div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>소속 부서</th>
-                    <th>일자</th>
-                    <th>사용자명</th>
-                    <th>출장지 명칭</th>
-                    <th>상세 내역</th>
-                    <th>원래 구분</th>
-                    <th>지출 금액</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for exp in expenses %}
-                <tr>
-                    <td><strong>{{ exp.team }}</strong></td>
-                    <td>{{ exp.date }}일</td>
-                    <td>{{ exp.user_name }}</td>
-                    <td>{{ exp.place }}</td>
-                    <td style="text-align: left;">{{ exp.content }}</td>
-                    <td><span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:12px; font-size:12px;">{{ exp.category }}</span></td>
-                    <td style="text-align: right; font-weight: bold;">{{ "{:,.0f}".format(exp.amount) }}원</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        
+        <form action="/expense/reorder" method="post" id="reorder_form">
+            <input type="hidden" name="search_month" value="{{ current_month }}">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:5%;">이동</th>
+                        <th style="width:5%;">순번</th>
+                        <th style="width:10%;">부서</th>
+                        <th style="width:10%;">일자</th>
+                        <th style="width:10%;">사용자</th>
+                        <th style="width:15%;">출장지</th>
+                        <th style="width:25%;">세부 사용 내용 및 목적</th>
+                        <th style="width:12%;">지출 합계액</th>
+                        <th style="width:12%;">작업 관리</th>
+                    </tr>
+                </thead>
+                <tbody id="draggable_tbody">
+                    {% for t in trips %}
+                    <tr class="drag-row" data-trip-id="{{ t.trip_id }}">
+                        <td class="drag-handle">☰</td>
+                        <td class="row-order-num">{{ loop.index }}</td>
+                        <td><span style="font-weight:bold;">{{ t.team }}</span></td>
+                        <td>{{ t.date[5:] }}</td>
+                        <td>{{ t.user_name }}</td>
+                        <td>{{ t.place }}</td>
+                        <td style="text-align:left; font-weight:bold; color:#1e3a8a;">
+                            {{ t.content }}
+                            <div style="margin-top:4px; font-weight:normal; font-size:11px; color:#4b5563;">
+                                {% for d in t.details %}
+                                <span style="background:#f3f4f6; padding:2px 6px; border-radius:3px; margin-right:4px; border:1px solid #e5e7eb;">{{ d.category }}: {{ "{:,.0f}".format(d.amount) }}원</span>
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td style="text-align:right; font-weight:bold; color:#10b981;">{{ "{:,.0f}".format(t.total_amount) }} 원</td>
+                        <td>
+                            <button type="button" class="btn-action btn-edit" 
+                                    data-trip-id="{{ t.trip_id }}"
+                                    data-date="{{ t.date }}"
+                                    data-user="{{ t.user_name }}"
+                                    data-place="{{ t.place }}"
+                                    data-content="{{ t.content }}"
+                                    data-details='{{ t.details_json | safe }}'
+                                    onclick="openEditModal(this)">✏️ 수정</button>
+                            <a href="/expense/delete/{{ t.trip_id }}?search_month={{ current_month }}" class="btn-action btn-delete" onclick="return confirm('정말 삭제하시겠습니까? 연결된 세부 영수증 항목이 모두 제거됩니다.');">🗑️ 삭제</a>
+                            <input type="hidden" name="trip_ids" value="{{ t.trip_id }}">
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" style="padding:40px; color:#9ca3af; font-weight:bold;">해당 월에 등록된 경비 정산 내역이 없습니다.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            {% if trips %}
+            <div style="margin-top:15px; text-align:right;">
+                <button type="submit" class="btn-order">🔄 변경된 정산 순서 최종 적용하기</button>
+            </div>
+            {% endif %}
+        </form>
     </div>
+
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top:0; border-bottom:2px solid #f59e0b; padding-bottom:10px; color:#d97706;">✏️ 지출 결의 항목 정보 및 영수증 수정</h3>
+            <form action="/expense/edit" method="post">
+                <input type="hidden" id="edit_trip_id" name="edit_trip_id">
+                
+                <div class="input-group">
+                    <label>지출 일자</label>
+                    <input type="date" id="edit_date" name="edit_date" required>
+                </div>
+                <div class="input-group">
+                    <label>사용자 성명</label>
+                    <input type="text" id="edit_user_name" name="edit_user_name" required>
+                </div>
+                <div class="input-group">
+                    <label>출장지</label>
+                    <input type="text" id="edit_place" name="edit_place" required>
+                </div>
+                <div class="input-group">
+                    <label>지출 내용 및 세부 목적</label>
+                    <input type="text" id="edit_content" name="edit_content" required style="font-weight:bold;">
+                </div>
+                
+                <h4 style="margin-bottom:10px; margin-top:20px; color:#475569; border-left:4px solid #f59e0b; padding-left:8px;">🧾 포함된 영수증 세부 목록 변경</h4>
+                <div id="edit_receipts_container"></div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:25px;">
+                    <button type="button" onclick="closeEditModal()" style="padding:12px; background:#9ca3af; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">취소</button>
+                    <button type="submit" style="padding:12px; background:#f59e0b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">💾 수정사항 반영 저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // 백엔드 파이썬 시스템으로부터 연동된 원천 데이터 적재
+        const rawStats = {{ raw_stats_json | safe }};
+        const currentMonthStr = "{{ current_month }}"; // 🌟 YYYY-MM 동적 할당
+
+        // -------------------------------------------------------------
+        // 🌟 [핵심 수정] 자바스크립트 사이드 대시보드 통계 재연산 가드 필터 도입
+        // -------------------------------------------------------------
+        let jsTotal = 0;
+        let jsSiunjeon = 0;
+        let jsOthers = 0;
+
+        rawStats.forEach(item => {
+            // 원천 데이터 날짜의 앞 7자리가 현재 선택 월과 똑같을 때만 합산에 반영!!
+            if (item.date && item.date.substring(0, 7) === currentMonthStr) {
+                jsTotal += item.amount;
+                if (item.team.includes("시운전")) {
+                    jsSiunjeon += item.amount;
+                } else if (item.team.includes("생산") || item.team.includes("영업") || item.team.includes("전장")) {
+                    jsOthers += item.amount;
+                }
+            }
+        });
+
+        // 정밀 필터링 처리된 통계 데이터 값을 대시보드 스코어보드 전면에 실시간 강제 업데이트 매핑
+        document.getElementById('dashboard-total-view').innerText = jsTotal.toLocaleString() + " 원";
+        document.getElementById('dashboard-siunjeon-view').innerText = jsSiunjeon.toLocaleString() + " 원";
+        document.getElementById('dashboard-others-view').innerText = jsOthers.toLocaleString() + " 원";
+
+
+        // 1. 데이터 집계 처리 자동화 (최근 6개월 타임라인 파싱)
+        const monthMap = {};
+        const categoryMap = {};
+        const teamMap = {"시운전팀":0, "생산팀":0, "영업팀":0, "전장팀":0};
+
+        // 타임라인 슬롯 동적 스캔 빌드
+        const baseDate = new Date(currentMonthStr + "-01");
+        const monthLabelArray = [];
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(baseDate.getFullYear(), baseDate.getMonth() - i, 1);
+            const mStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+            monthLabelArray.push(mStr);
+            monthMap[mStr] = 0;
+        }
+
+        // 스캔 집계 가동
+        rawStats.forEach(item => {
+            const m = item.date.substring(0, 7);
+            if (monthMap[m] !== undefined) {
+                monthMap[m] += item.amount;
+            }
+            // 🌟 파이 차트는 오직 현재 선택된 월만 표현하도록 가드 추가
+            if (m === currentMonthStr) {
+                categoryMap[item.category] = (categoryMap[item.category] || 0) + item.amount;
+                
+                let tKey = item.team;
+                if(!tKey.endsWith('팀') && tKey !== "시운전") tKey += '팀';
+                if(tKey === "시운전") tKey = "시운전팀";
+                if(teamMap[tKey] !== undefined) {
+                    teamMap[tKey] += item.amount;
+                }
+            }
+        });
+
+        // 2. 통합 대시보드 시각화 차트 오브젝트 드로잉 가동
+        Chart.register(ChartDataLabels);
+
+        // [차트 1] 부서별 지출 비중 혼합 대시보드
+        const ctxMix = document.getElementById('mixChart').getContext('2d');
+        new Chart(ctxMix, {
+            type: 'bar',
+            data: {
+                labels: Object.keys(teamMap),
+                datasets: [{
+                    label: `${currentMonthStr[5] === '0' ? currentMonthStr[6] : currentMonthStr.substring(5,7)}월 부서별 총합`,
+                    data: Object.values(teamMap),
+                    backgroundColor: ['#1e3a8a', '#10b981', '#f59e0b', '#6b7280'],
+                    borderWidth: 0,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    title: { display: true, text: '부서별 경비 집계', font: { size: 12, bold: true } },
+                    datalabels: {
+                        anchor: 'end', align: 'end',
+                        formatter: (val) => val > 0 ? (val/10000).toFixed(0) + '만' : '',
+                        font: { size: 10, weight: 'bold' }, color: '#333'
+                    }
+                },
+                scales: { y: { display: false, ticks: { display: false }, grid: { display: false } }, x: { grid: { display: false } } }
+            }
+        });
+
+        // [차트 2] 항목별 지출 비중 도넛/파이 차트
+        const ctxPie = document.getElementById('pieChart').getContext('2d');
+        const pieLabels = Object.keys(categoryMap);
+        const pieData = Object.values(categoryMap);
+        new Chart(ctxPie, {
+            type: 'pie',
+            data: {
+                labels: pieLabels,
+                datasets: [{
+                    data: pieData,
+                    backgroundColor: ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#6b7280','#14b8a6','#b45309']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } },
+                    title: { display: true, text: '이번달 주요 항목별 비율', font: { size: 12, bold: true } },
+                    datalabels: {
+                        formatter: (value, ctx) => {
+                            let sum = 0;
+                            let dataArr = ctx.chart.data.datasets[0].data;
+                            dataArr.map(data => { sum += data; });
+                            let percentage = (value*100 / sum).toFixed(0)+"%";
+                            return value > (sum * 0.05) ? percentage : '';
+                        },
+                        color: '#fff', font: { size: 10, weight: 'bold' }
+                    }
+                }
+            }
+        });
+
+        // [차트 3] 6개월간 장기 지출 추이 차트
+        const ctxTrend = document.getElementById('trendChart').getContext('2d');
+        new Chart(ctxTrend, {
+            type: 'line',
+            data: {
+                labels: monthLabelArray,
+                datasets: [{
+                    label: '월간 총경비 추이',
+                    data: monthLabelArray.map(m => monthMap[m]),
+                    borderColor: '#1e3a8a',
+                    backgroundColor: 'rgba(30,58,138,0.05)',
+                    fill: true,
+                    tension: 0.2,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#1e3a8a'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    title: { display: true, text: '최근 6개월간 경비 변동 추이 (원)', font: { size: 12, bold: true } },
+                    datalabels: {
+                        anchor: 'top', align: 'top',
+                        formatter: (val) => val > 0 ? (val/10000).toFixed(0) + '만원' : '0',
+                        font: { size: 9, weight: 'bold' }, color: '#1e3a8a'
+                    }
+                },
+                scales: { y: { display: false, grid: { display: false } }, x: { grid: { display: false } } }
+            }
+        });
+
+
+        // 3. ☰ 수동 테이블 정산 순서 재배치 기능 구현 (Drag & Drop 인터페이스 엔진)
+        const tbody = document.getElementById('draggable_tbody');
+        let dragSrcEl = null;
+
+        if (tbody && tbody.rows.length > 0 && tbody.rows[0].cells.length > 1) {
+            tbody.addEventListener('dragstart', function(e) {
+                const row = e.target.closest('tr');
+                if(!row) return;
+                dragSrcEl = row;
+                row.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/html', row.innerHTML);
+            });
+
+            tbody.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                const row = e.target.closest('tr');
+                if(!row || row === dragSrcEl) return;
+                row.style.background = "#e8f5e9";
+            });
+
+            tbody.addEventListener('dragleave', function(e) {
+                const row = e.target.closest('tr');
+                if(row) row.style.background = "";
+            });
+
+            tbody.addEventListener('drop', function(e) {
+                e.preventDefault();
+                const targetRow = e.target.closest('tr');
+                if (!targetRow || targetRow === dragSrcEl) return;
+                
+                targetRow.style.background = "";
+                
+                const allRows = Array.from(tbody.rows);
+                const srcIdx = allRows.indexOf(dragSrcEl);
+                const targetIdx = allRows.indexOf(targetRow);
+                
+                if (srcIdx < targetIdx) {
+                    targetRow.after(dragSrcEl);
+                } else {
+                    targetRow.before(dragSrcEl);
+                }
+                
+                // 순번 스코어 재연산 컴파일
+                Array.from(tbody.rows).forEach((r, idx) => {
+                    const orderCell = r.querySelector('.row-order-num');
+                    if(orderCell) orderCell.innerText = idx + 1;
+                });
+            });
+
+            tbody.addEventListener('dragend', function(e) {
+                const row = e.target.closest('tr');
+                if(row) row.classList.remove('dragging');
+                Array.from(tbody.rows).forEach(r => r.style.background = "");
+            });
+
+            // 핸들러에 드래그 속성 주입 바인딩
+            tbody.querySelectorAll('.drag-handle').forEach(handle => {
+                handle.addEventListener('mousedown', function() {
+                    handle.closest('tr').setAttribute('draggable', 'true');
+                });
+                handle.addEventListener('mouseup', function() {
+                    handle.closest('tr').removeAttribute('draggable');
+                });
+            });
+        }
+    </script>
 </body>
 </html>
