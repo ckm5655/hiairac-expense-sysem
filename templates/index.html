@@ -62,6 +62,7 @@
         .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
     </style>
     <script>
+        // 백엔드에서 안전하게 넘겨받은 카테고리 리스트 선언
         const globalCategories = [
             {% for cat in categories %} "{{ cat }}", {% endfor %}
         ];
@@ -210,7 +211,7 @@
         <h3 style="color: #0f172a; margin-top:0; border-bottom: 2px solid #0f172a; padding-bottom:10px;">📊 {{ current_month }} 전사 부서/출장지 통합 대시보드</h3>
         <div class="btn-toggle-group">
             <button type="button" class="btn-toggle active" onclick="filterTeamStats('ALL', this)">🌐 전사 전체보기</button>
-            <button type="button" class="btn-toggle" onclick="filterTeamStats('시운전', this)">🛠️ 시운전팀</button>
+            <button type="button" class="btn-toggle" onclick="filterTeamStats('시운전팀', this)">🛠️ 시운전팀</button>
             <button type="button" class="btn-toggle" onclick="filterTeamStats('생산팀', this)">⚙️ 생산팀</button>
             <button type="button" class="btn-toggle" onclick="filterTeamStats('영업팀', this)">💼 영업팀</button>
             <button type="button" class="btn-toggle" onclick="filterTeamStats('전장팀', this)">🏭 전장팀</button>
@@ -295,19 +296,19 @@
             return norm1 === norm2;
         }
 
-        // 대시보드 및 리스트 필터링 핵심 함수 수정본 적용
         function filterTeamStats(selectedTeam, btnElement) {
             if (btnElement) {
                 document.querySelectorAll('.btn-toggle').forEach(btn => btn.classList.remove('active'));
                 btnElement.classList.add('active');
             }
 
-            // [날짜 필터 고도화] 전체 통계 데이터에서 오직 선택한 마감 월(currentMonthStr)의 데이터만 추출
+            // 1. 선택된 '마감 월'에 속하는 데이터만 1차 정제
             const monthFiltered = rawStatsData.filter(item => {
-                const fullDate = item.date || item.expense_date || item.month || "";
+                const fullDate = item.date || "";
                 return fullDate.substring(0, 7) === currentMonthStr;
             });
 
+            // 2. 선택된 '부서 탭'에 따라 2차 정제
             const filtered = (selectedTeam === 'ALL') 
                 ? monthFiltered 
                 : monthFiltered.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
@@ -317,10 +318,7 @@
             let placeMap = {};
 
             filtered.forEach(item => {
-                let rawAmount = item.amount || item.total_amount || 0;
-                if (typeof rawAmount === 'string') {
-                    rawAmount = parseInt(rawAmount.replace(/[^0-9]/g, '')) || 0;
-                }
+                let rawAmount = item.amount || 0;
                 totalSum += rawAmount;
 
                 const cat = item.std_category || item.category;
@@ -335,8 +333,10 @@
                 }
             });
 
+            // 선택 월 지출 총합 카드 갱신
             document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
 
+            // 출장지별 가로 바 차트 갱신
             if (placeChartObj) {
                 placeChartObj.data.labels = Object.keys(placeMap).length ? Object.keys(placeMap) : ['데이터 없음'];
                 placeChartObj.data.datasets[0].data = Object.values(placeMap).length ? Object.values(placeMap) : [0];
@@ -344,6 +344,7 @@
                 placeChartObj.update();
             }
 
+            // 원형 파이 차트 갱신 (유사 항목 병합)
             if (categoryChartObj) {
                 categoryChartObj.data.datasets[0].data = [
                     (categoryMap['교통비'] + categoryMap['교통/주차비']), 
@@ -356,6 +357,7 @@
                 categoryChartObj.update();
             }
 
+            // 6개월 추이 선형 차트 데이터 연산 (추이는 월 관계없이 전체 데이터 기반)
             const recent6 = getRecent6Months(currentMonthStr);
             let trendMap = {};
             recent6.forEach(m => trendMap[m.key] = 0);
@@ -365,20 +367,16 @@
                 : rawStatsData.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
 
             trendFiltered.forEach(item => {
-                const fullDate = item.date || item.expense_date || item.month || "";
+                const fullDate = item.date || "";
                 if (fullDate.length >= 7) {
                     const yyyymm = fullDate.substring(0, 7);
                     if (trendMap[yyyymm] !== undefined) {
-                        let rawAmount = item.amount || item.total_amount || 0;
-                        if (typeof rawAmount === 'string') {
-                            rawAmount = parseInt(rawAmount.replace(/[^0-9]/g, '')) || 0;
-                        }
-                        trendMap[yyyymm] += rawAmount;
+                        trendMap[yyyymm] += item.amount || 0;
                     }
                 }
             });
 
-            // 하단 데이터 목록 테이블 행(Row) 필터링 조건
+            // 하단 데이터 목록 테이블 실시간 행 필터링
             const rows = document.querySelectorAll('#drag_tbody .drag-row');
             rows.forEach(row => {
                 const teamCell = row.querySelector('.team-badge');
@@ -526,11 +524,7 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1.2fr 1.8fr; gap: 15px;">
                     <div class="input-group">
                         <label>지출 일자</label>
-                        
-                        <input type="date" name="expense_date" 
-                               min="{{ month_start_date }}" 
-                               max="{{ month_end_date }}" required>
-                    <input type="hidden" name="search_month" value="{{ current_month }}">
+                        <input type="date" name="expense_date" min="{{ month_start_date }}" max="{{ month_end_date }}" required>
                     </div>
                     <div class="input-group">
                         <label>사용자 (이름)</label>
@@ -549,7 +543,7 @@
                 <div style="margin-top:15px; background:#fff3cd; padding:10px; border-radius:4px; border:1px solid #ffeba2;">
                     <label style="font-weight:bold; font-size:13px;">⚙️ 관리자 전용 대리 등록 권한 -> 대상 팀 선택 : </label>
                     <select name="target_team" style="padding:5px; width:150px; display:inline-block; margin-left:10px;">
-                        <option value="시운전">시운전</option>
+                        <option value="시운전팀">시운전팀</option>
                         <option value="생산팀">생산팀</option>
                         <option value="영업팀">영업팀</option>
                         <option value="전장팀">전장팀</option>
@@ -586,7 +580,7 @@
                 <span style="font-size: 13px; font-weight: bold; margin-right: 5px; color:#475569;">📥 엑셀 다운로드 링크:</span>
                 {% if team == "관리자" %}
                     <a href="/download/cover?team=ALL&month={{ current_month }}" class="btn-download" style="background: #2563eb;">🌐 전사 통합 다운로드</a>
-                    <a href="/download/cover?team=시운전&month={{ current_month }}" class="btn-download" style="background: #3b82f6;">🛠️ 시운전팀</a>
+                    <a href="/download/cover?team=시운전팀&month={{ current_month }}" class="btn-download" style="background: #3b82f6;">🛠️ 시운전팀</a>
                     <a href="/download/cover?team=생산팀&month={{ current_month }}" class="btn-download" style="background: #10b981;">⚙️ 생산팀</a>
                     <a href="/download/cover?team=영업팀&month={{ current_month }}" class="btn-download" style="background: #f59e0b;">💼 영업팀</a>
                     <a href="/download/cover?team=전장팀&month={{ current_month }}" class="btn-download" style="background: #8b5cf6;">🏭 전장팀</a>
