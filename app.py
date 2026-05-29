@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-# [치트키] 서버 실행 시 필요한 라이브러리가 없으면 알아서 자동 설치하는 로직
+# 서버 실행 시 필요한 라이브러리가 없으면 알아서 자동 설치하는 로직
 try:
     from flask import Flask, render_template, request, redirect, url_for, session, send_file
     import openpyxl
@@ -56,6 +56,13 @@ def save_data():
 
 ALL_EXPENSES = load_data()
 
+# 💡 부서명 불일치 해결을 위한 텍스트 표준화 도우미 함수
+def is_match_team(db_team, target_team):
+    if not db_team or not target_team:
+        return False
+    # 서로 공백을 제거하고 '팀' 글자를 떼어낸 순수 키워드로 비교 (ex: '시운전' == '시운전')
+    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
+
 @app.route('/')
 def login_page():
     return render_template('login.html')
@@ -86,10 +93,12 @@ def index_page():
     
     categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
     
-    # 1. 이번 달 기준 팀별/개인별 정산 목록 필터링
+    # 1. 이번 달 기준 데이터 필터링
     month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
+    
+    # 🌟 [핵심 수정] 일반 팀 로그인 시 '시운전' / '시운전팀' 유연하게 동시 매칭되도록 보정
     if user_team != "관리자":
-        month_data = [x for x in month_data if x.get('team') == user_team]
+        month_data = [x for x in month_data if is_match_team(x.get('team', ''), user_team)]
         
     month_data.sort(key=lambda x: x.get('order', 999))
     
@@ -121,18 +130,19 @@ def index_page():
     for t in trips_list:
         t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
         
-    # 2. 대시보드 상단 미니 통계 (선택한 '당월' 전체 부서 기준 합계)
+    # 2. 대시보드 상단 미니 통계 (선택한 '당월' 전체 부서 기준 합계 및 안전 보정)
     dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0}
     all_month_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(current_month)]
+    
     for x in all_month_data:
         dashboard_stats["총합"] += x['amount']
-        t_name = x['team']
+        t_name = x.get('team', '')
         if "시운전" in t_name: dashboard_stats["시운전"] += x['amount']
         elif "생산" in t_name: dashboard_stats["생산팀"] += x['amount']
         elif "영업" in t_name: dashboard_stats["영업팀"] += x['amount']
         elif "전장" in t_name: dashboard_stats["전장팀"] += x['amount']
         
-    # 3. 📊 그래프용 최근 6개월 범위 데이터 수집 로직
+    # 3. 그래프용 최근 6개월 범위 데이터 수집 로직
     try:
         base_date = datetime.datetime.strptime(current_month, "%Y-%m")
     except:
@@ -220,7 +230,6 @@ def edit_expense():
     if 'user_id' not in session: return redirect(url_for('login_page'))
     global ALL_EXPENSES
     
-    # 🛠️ 핵심 교정: HTML 모달 폼의 name 속성인 'edit_trip_id'와 완벽 매칭 유도
     trip_id = request.form.get('edit_trip_id')
     expense_date = request.form.get('edit_date')
     user_name = request.form.get('edit_user_name')
@@ -279,33 +288,40 @@ def reorder_expenses():
     save_data()
     return redirect(url_for('index_page', search_month=search_month))
 
+# 🌟 [대대적 전면 보수] 전사 통합 엑셀 다운로드 및 부서별 내용 실종 방지 기능 구현
 @app.route('/download/cover')
 def download_cover():
-    target_team = request.args.get('team')
+    target_team = request.args.get('team', 'ALL')
     target_month = request.args.get('month', datetime.date.today().strftime('%Y-%m'))
     
-    if not target_team.endswith('팀') and target_team != "시운전":
-        target_team += "팀"
-        
-    raw_data = [x for x in ALL_EXPENSES if x.get('team') == target_team and x.get('date', '').startswith(target_month)]
-    raw_data.sort(key=lambda x: x.get('date', ''))
+    # 전사 전체('ALL')인 경우와 특정 부서인 경우 구분 필터링
+    if target_team == 'ALL':
+        raw_data = [x for x in ALL_EXPENSES if x.get('date', '').startswith(target_month)]
+        display_team_title = "전사 통합"
+    else:
+        raw_data = [x for x in ALL_EXPENSES if is_match_team(x.get('team', ''), target_team) and x.get('date', '').startswith(target_month)]
+        display_team_title = target_team
+        if not display_team_title.endswith('팀') and display_team_title != "시운전":
+            display_team_title += "팀"
+
+    raw_data.sort(key=lambda x: (x.get('order', 999), x.get('date', '')))
     
     # --- [데이터 가공] 1번 시트용: 건별 일괄 합산 로직 ---
     aggregated = {}
     for exp in raw_data:
-        key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''))
+        # 부서 구분도 유니크 키에 포함시켜 전사 통합 출력 시 데이터 분별력 유도
+        key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''), exp.get('team', ''))
         amt = exp.get('amount', 0)
         cat = exp.get('category', '기타')
         
         if key not in aggregated:
             aggregated[key] = {
-                "date": key[0], "content": key[1], "place": key[2], "user_name": key[3],
+                "date": key[0], "content": key[1], "place": key[2], "user_name": key[3], "team": key[4],
                 "total": 0, "교통비": 0, "식대비": 0, "숙박비": 0, "차량유지비": 0, "기타": 0
             }
             
         aggregated[key]["total"] += amt
         
-        # 🛠️ '교통비/주차비', '식비/식대비' 텍스트 불일치 예방 및 통합 매칭 예외처리
         if cat in ["교통비", "주차비", "교통/주차비"]:
             aggregated[key]["교통비"] += amt
         elif cat in ["식비", "식대비"]:
@@ -318,7 +334,6 @@ def download_cover():
             aggregated[key]["기타"] += amt
 
     sorted_cover_rows = list(aggregated.values())
-    sorted_cover_rows.sort(key=lambda x: x['date'])
     
     wb = openpyxl.Workbook()
     
@@ -343,7 +358,7 @@ def download_cover():
     ws1.views.sheetView[0].showGridLines = True
     
     ws1.merge_cells('A1:D2')
-    ws1['A1'] = f"{target_month[5:7]}월 개인경비 사용내역"
+    ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
     ws1['A1'].font = font_title
     ws1['A1'].alignment = Alignment(horizontal='left', vertical='center')
 
@@ -361,7 +376,7 @@ def download_cover():
     ws1.row_dimensions[3].height = 24
 
     ws1.merge_cells('A4:D4')
-    ws1['A4'] = f"작성일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}  /  부서: {target_team}"
+    ws1['A4'] = f"작성일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
     ws1['A4'].font = font_main
     ws1.row_dimensions[4].height = 24
 
@@ -375,7 +390,9 @@ def download_cover():
     for idx, row_data in enumerate(sorted_cover_rows, 1):
         ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
         ws1.cell(row=r_idx, column=2, value=row_data['date'][5:]).alignment = align_center
-        ws1.cell(row=r_idx, column=3, value=row_data['content']).alignment = align_left
+        # 전사 모드일 때는 내용 앞에 부서명을 함께 표시해 시인성 확대
+        display_content = f"[{row_data['team']}] {row_data['content']}" if target_team == 'ALL' else row_data['content']
+        ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
         ws1.cell(row=r_idx, column=4, value=row_data['place']).alignment = align_center
         
         t_cell = ws1.cell(row=r_idx, column=5, value=row_data['total'])
@@ -415,7 +432,7 @@ def download_cover():
     ws1.row_dimensions[sum_row_idx].height = 30
 
     budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000, "시운전": 1000000}
-    team_budget = budget_map.get(target_team, 0)
+    team_budget = budget_map.get(display_team_title, 0) if target_team != 'ALL' else 0
     budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
     
     r_idx += 2
@@ -425,13 +442,13 @@ def download_cover():
     if team_budget > 0:
         summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
     else:
-        summary_cell.value = f'="가지급금금액(이월잔액포함) [ 0 ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT(0-E{sum_row_idx}, "#,##0") & " ]"'
+        summary_cell.value = f'="전체 통합 경비 합계액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ] 원"'
         
     summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
     summary_cell.alignment = align_center
     ws1.row_dimensions[r_idx].height = 36
 
-    widths1 = {1: 5, 2: 10, 3: 30, 4: 15, 5: 12, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
+    widths1 = {1: 5, 2: 10, 3: 35, 4: 15, 5: 12, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
     for col_idx, w in widths1.items():
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
@@ -447,7 +464,7 @@ def download_cover():
     ws2.row_dimensions[1].height = 20
     ws2.row_dimensions[4].height = 28
     
-    headers2 = ["순번", "사용일자", "성명", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고(영수증확인)"]
+    headers2 = ["순번", "사용일자", "부서명", "성명", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
     for col_idx, h in enumerate(headers2, 1):
         cell = ws2.cell(row=4, column=col_idx, value=h)
         cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
@@ -456,17 +473,18 @@ def download_cover():
     for idx, exp in enumerate(raw_data, 1):
         ws2.cell(row=d_idx, column=1, value=idx).alignment = align_center
         ws2.cell(row=d_idx, column=2, value=exp.get('date', '')[5:]).alignment = align_center
-        ws2.cell(row=d_idx, column=3, value=exp.get('user_name', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=4, value=exp.get('category', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=5, value=exp.get('content', '')).alignment = align_left
-        ws2.cell(row=d_idx, column=6, value=exp.get('place', '')).alignment = align_center
+        ws2.cell(row=d_idx, column=3, value=exp.get('team', '')).alignment = align_center
+        ws2.cell(row=d_idx, column=4, value=exp.get('user_name', '')).alignment = align_center
+        ws2.cell(row=d_idx, column=5, value=exp.get('category', '')).alignment = align_center
+        ws2.cell(row=d_idx, column=6, value=exp.get('content', '')).alignment = align_left
+        ws2.cell(row=d_idx, column=7, value=exp.get('place', '')).alignment = align_center
         
-        amt_cell = ws2.cell(row=d_idx, column=7, value=exp.get('amount', 0))
+        amt_cell = ws2.cell(row=d_idx, column=8, value=exp.get('amount', 0))
         amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
         
-        ws2.cell(row=d_idx, column=8, value="확인완료").alignment = align_center
+        ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
         
-        for c in range(1, 9):
+        for c in range(1, 10):
             cell = ws2.cell(row=d_idx, column=c)
             cell.border = thin_border
             cell.font = font_main
@@ -474,19 +492,19 @@ def download_cover():
         ws2.row_dimensions[d_idx].height = 24
         d_idx += 1
         
-    ws2.merge_cells(start_row=d_idx, start_column=1, end_row=d_idx, end_column=6)
+    ws2.merge_cells(start_row=d_idx, start_column=1, end_row=d_idx, end_column=7)
     ws2.cell(row=d_idx, column=1, value="총 상세 지출액 합계").font = font_sum
     ws2.cell(row=d_idx, column=1).alignment = align_center
     
-    for c in range(1, 9):
+    for c in range(1, 10):
         cell = ws2.cell(row=d_idx, column=c)
         cell.border = thin_border; cell.fill = fill_sum
         
-    sum_cell2 = ws2.cell(row=d_idx, column=7, value=f"=SUM(G5:G{d_idx-1})")
+    sum_cell2 = ws2.cell(row=d_idx, column=8, value=f"=SUM(H5:H{d_idx-1})")
     sum_cell2.font = font_sum; sum_cell2.number_format = '#,##0'; sum_cell2.alignment = align_right
     ws2.row_dimensions[d_idx].height = 26
     
-    widths2 = [5, 11, 10, 12, 32, 15, 14, 16]
+    widths2 = [5, 11, 12, 10, 12, 32, 15, 14, 12]
     for i, w in enumerate(widths2, 1):
         ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
