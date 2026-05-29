@@ -425,7 +425,12 @@
                         if (percentageNum < 5) {
                             return ''; 
                         }
-                        },
+                        // 3. 5% 이상인 큼직한 조각들만 퍼센트 노출
+                    return percentageNum.toFixed(1) + "%";
+                        }
+                
+                 },
+                        
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
