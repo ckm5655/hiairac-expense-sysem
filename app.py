@@ -1,568 +1,242 @@
-import subprocess
-import sys
-
-# 서버 실행 시 필요한 라이브러리가 없으면 알아서 자동 설치하는 로직
-try:
-    from flask import Flask, render_template, request, redirect, url_for, session, send_file
-    import openpyxl
-except ModuleNotFoundError:
-    print("필수 라이브러리가 누락되어 자동 설치를 시작합니다...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "openpyxl"])
-    from flask import Flask, render_template, request, redirect, url_for, session, send_file
-    import openpyxl
-
-import datetime
-import calendar
-import os
-import uuid
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import json
-from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
-from io import BytesIO
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = "trip_unified_advanced_system_2026"
+app.secret_key = 'your_secret_key_here'  # 세션 암호화 키
 
-USER_CREDENTIALS = {
-    "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
-    "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
-    "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
-    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
-    "전장": {"password": "1234", "name": "전장", "team": "전장팀"}
-}
+# 시스템 테스트용 모의 데이터 (DB 구조에 맞게 연동 가능)
+# 차트가 완벽히 작동하려면 데이터 항목 내 금액(amount)이 '정수(int)'여야 합니다.
+MOCK_TRIPS = [
+    {
+        "trip_id": "1",
+        "order": 1,
+        "team": "시운전팀",
+        "date": "2026-05-10",
+        "user": "홍길동",
+        "place": "삼성중공업",
+        "content": "SPOT COOLER 점검 지원",
+        "items_desc": "교통비: 50,000원 | 식대비: 30,000원",
+        "total_amount": 80000,
+        "details_json": json.dumps([
+            {"id": "r1", "category": "교통비", "amount": 50000},
+            {"id": "r2", "category": "식대비", "amount": 30000}
+        ], ensure_ascii=False)
+    },
+    {
+        "trip_id": "2",
+        "order": 2,
+        "team": "생산팀",
+        "date": "2026-05-15",
+        "user": "김철수",
+        "place": "울산공장",
+        "content": "생산 라인 설비 세팅",
+        "items_desc": "숙박비: 70,000원 | 식비: 25,000원",
+        "total_amount": 95000,
+        "details_json": json.dumps([
+            {"id": "r3", "category": "숙박비", "amount": 70000},
+            {"id": "r4", "category": "식비", "amount": 25000}
+        ], ensure_ascii=False)
+    }
+]
 
-ACCOUNT_MAPPING = {
-    "교통비": "512", "주차비": "512", "식비": "512", "식대비": "512",
-    "차량유지비": "522", "운반비": "524", "통신비": "513",
-    "소모품비": "530", "택배비": "524", "수수료": "531", "숙박비": "512", "기타": "533"
-}
-
-DATA_FILE = "expenses.json"
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print("데이터 로딩 실패:", e)
-            return []
-    return []
-
-def save_data():
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(ALL_EXPENSES, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print("데이터 저장 실패:", e)
-
-ALL_EXPENSES = load_data()
-
-def is_match_team(db_team, target_team):
-    if not db_team or not target_team:
-        return False
-    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
+CATEGORIES = ["교통비", "교통/주차비", "식대비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
 
 @app.route('/')
-def login_page():
-    return render_template('login.html')
-
-@app.route('/login', methods=['POST'])
-def do_login():
-    uid = request.form.get('username')
-    upass = request.form.get('password')
-    if uid in USER_CREDENTIALS and USER_CREDENTIALS[uid]['password'] == upass:
-        session['user_id'] = uid
-        session['username'] = USER_CREDENTIALS[uid]['name']
-        session['team'] = USER_CREDENTIALS[uid]['team']
-        return redirect(url_for('index_page'))
-    return "<script>alert('로그인 정보가 올바르지 않습니다.'); history.back();</script>"
-
-@app.route('/logout')
-def do_logout():
-    session.clear()
-    return redirect(url_for('login_page'))
+def home():
+    # 세션 테스트용 로그인 처리 (필요시 로그인 시스템 연동)
+    session['username'] = '관리자님'
+    session['team'] = '관리자' 
+    return redirect(url_for('index'))
 
 @app.route('/index')
-def index_page():
-    if 'user_id' not in session:
-        return redirect(url_for('login_page'))
+def index():
+    username = session.get('username', '게스트')
+    team = session.get('team', '시운전팀')
     
-    # 🌟 [보안강화] 공백 제거 및 딱 7자리(YYYY-MM) 포맷 강제 추출
-    raw_month = request.args.get('search_month', datetime.date.today().strftime('%Y-%m')).strip()
-    current_month = raw_month[:7] 
-    current_year = current_month[:4]
-    user_team = session['team']
+    # 상단 날짜 필터 (기본값: 현재 년-월)
+    current_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
     
-    try:
-        year_int = int(current_year)
-        month_int = int(current_month[5:7])
-        last_day = calendar.monthrange(year_int, month_int)[1]
-        month_start_date = f"{current_month}-01"
-        month_end_date = f"{current_month}-{last_day:02d}"
-    except Exception as e:
-        month_start_date = ""
-        month_end_date = ""
+    month_start_date = f"{current_month}-01"
+    month_end_date = f"{current_month}-31"
     
-    categories_list = ["교통비", "주차비", "식비", "식대비", "숙박비", "소모품비", "차량유지비","택배/운반비", "기타"]
+    # 1. 목록에 노출할 리스트 데이터 필터링 (선택 월 기준)
+    filtered_trips = [t for t in MOCK_TRIPS if t['date'].startswith(current_month)]
+    filtered_trips = sorted(filtered_trips, key=lambda x: x['order'])
     
-    # 🌟 [비교 로직 전면 수정] startswith 대신 앞 7자리가 완벽히 똑같은지('==') 검증합니다.
-    month_data = [x for x in ALL_EXPENSES if x.get('date', '').strip()[:7] == current_month]
+    # 2. 대시보드 연동용 통합 원본 데이터 가공 (★가장 중요)
+    raw_stats_list = []
+    dashboard_stats = {'총합': 0, '시운전': 0, '시운전팀': 0, '생산팀': 0, '영업팀': 0, '전장팀': 0}
     
-    if user_team != "관리자":
-        month_data = [x for x in month_data if is_match_team(x.get('team', ''), user_team)]
-        
-    month_data.sort(key=lambda x: x.get('order', 999))
-    
-    trips_map = {}
-    for exp in month_data:
-        tid = exp['trip_id']
-        if tid not in trips_map:
-            trips_map[tid] = {
-                'trip_id': tid,
-                'order': exp.get('order', 1),
-                'team': exp.get('team', ''),
-                'date': exp.get('date', ''),
-                'user_name': exp.get('user_name', ''),
-                'place': exp.get('place', ''),
-                'content': exp.get('content', ''),
-                'details': [],
-                'total_amount': 0
-            }
-        trips_map[tid]['details'].append({
-            'id': exp['id'],
-            'category': exp['category'],
-            'amount': exp['amount']
-        })
-        trips_map[tid]['total_amount'] += exp['amount']
-        
-    trips_list = list(trips_map.values())
-    trips_list.sort(key=lambda x: x['order'])
-    
-    for t in trips_list:
-        t['details_json'] = json.dumps(t['details'], ensure_ascii=False)
-        
-    # 2. 📊 대시보드 상단 통계 연산 제어
-    dashboard_stats = {"총합": 0, "시운전": 0, "생산팀": 0, "영업팀": 0, "전장팀": 0, "연도누적": 0}
-    
-    # [A] 선택 월 지출 총합: 완벽히 격리된 month_data 기준으로만 스캔하므로 5월 데이터가 6월에 절대 섞일 수 없습니다.
-    for x in month_data:
-        amt = x.get('amount', 0)
-        dashboard_stats["총합"] += amt
-        
-        t_name = x.get('team', '')
-        if "시운전" in t_name: dashboard_stats["시운전"] += amt
-        elif "생산" in t_name: dashboard_stats["생산팀"] += amt
-        elif "영업" in t_name: dashboard_stats["영업팀"] += amt
-        elif "전장" in t_name: dashboard_stats["전장팀"] += amt
-            
-    # [B] 고정 누적액 계산: 해당 연도(YYYY)만 정확하게 잘라 일치 여부 비교
-    for x in ALL_EXPENSES:
-        x_date = x.get('date', '').strip()
-        if x_date[:4] == current_year:
-            if user_team == "관리자":
-                dashboard_stats["연도누적"] += x.get('amount', 0)
-            else:
-                if is_match_team(x.get('team', ''), user_team):
-                    dashboard_stats["연도누적"] += x.get('amount', 0)
-        
-    # 3. 그래프용 데이터 수집
-    try:
-        base_date = datetime.datetime.strptime(current_month, "%Y-%m")
-    except:
+    for t in MOCK_TRIPS:
         try:
-            base_date = datetime.datetime.strptime(current_month + "-01", "%Y-%m-%d")
+            details = json.loads(t['details_json'])
         except:
-            base_date = datetime.datetime.today()
+            details = []
+            
+        for item in details:
+            # 자바스크립트 차트 엔진이 정상 분류할 수 있도록 규격 동기화
+            stat_item = {
+                "date": t['date'],
+                "team": t['team'],
+                "place": t['place'],
+                "category": item.get('category', '기타'),
+                "std_category": item.get('category', '기타'),
+                "amount": int(item.get('amount', 0))
+            }
+            raw_stats_list.append(stat_item)
+            
+            # 선택 월 기준 상단 카드 요약 누적
+            if t['date'].startswith(current_month):
+                amt = int(item.get('amount', 0))
+                dashboard_stats['총합'] += amt
+                
+                norm_team = t['team'].replace('팀', '').strip()
+                if norm_team in ['시운전', '시운전팀']:
+                    dashboard_stats['시운전'] += amt
+                elif norm_team == '생산':
+                    dashboard_stats['생산팀'] += amt
+                elif norm_team == '영업':
+                    dashboard_stats['영업팀'] += amt
+                elif norm_team == '전장':
+                    dashboard_stats['전장팀'] += amt
+                    
+                if t['team'] in dashboard_stats:
+                    dashboard_stats[t['team']] += amt
 
-    start_year = base_date.year
-    start_month_num = base_date.month - 5
-    while start_month_num <= 0:
-        start_month_num += 12
-        start_year -= 1
-        
-    start_month_str = f"{start_year}-{start_month_num:02d}"
-    end_month_str = current_month
-
-    raw_stats = []
-    for x in ALL_EXPENSES:
-        data_month = x.get('date', '').strip()[:7]
-        if start_month_str <= data_month <= end_month_str:
-            if user_team != "관리자" and not is_match_team(x.get('team', ''), user_team):
-                continue
-            raw_stats.append({
-                'team': x['team'],
-                'date': x['date'],
-                'place': x['place'],
-                'category': x['category'],
-                'amount': x['amount']
-            })
-        
-    return render_template('index.html', 
-                           username=session['username'], 
-                           team=user_team,
-                           current_month=current_month,
-                           month_start_date=month_start_date,
-                           month_end_date=month_end_date,
-                           categories=categories_list,
-                           trips=trips_list,
-                           dashboard_stats=dashboard_stats,
-                           raw_stats_json=json.dumps(raw_stats, ensure_ascii=False))
+    return render_template(
+        'index.html',
+        username=username,
+        team=team,
+        current_month=current_month,
+        month_start_date=month_start_date,
+        month_end_date=month_end_date,
+        trips=filtered_trips,
+        categories=CATEGORIES,
+        dashboard_stats=dashboard_stats,
+        raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False)
+    )
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    
-    user_team = session['team']
-    if user_team == "관리자":
-        user_team = request.form.get('target_team', '시운전팀')
-        if not user_team.endswith('팀') and user_team != "시운전":
-            user_team += "팀"
-
-    expense_date = request.form.get('expense_date').strip()
-    
-    # 서버 측 이중 보안 방어 (글자 수 공백 미스매치 완벽 방지기능 도입)
-    search_month = request.form.get('search_month', '').strip()[:7]
-    if search_month and expense_date[:7] != search_month:
-        return f"<script>alert('{search_month}월에 맞는 날짜만 등록할 수 있습니다.'); history.back();</script>"
-
+    expense_date = request.form.get('expense_date')
     user_name = request.form.get('user_name')
     place = request.form.get('place')
     content = request.form.get('content')
+    search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
     
-    categories = request.form.getlist('receipt_category')
-    amounts = request.form.getlist('receipt_amount')
-    
-    trip_id = str(uuid.uuid4())
-    
-    actual_month = expense_date[:7] 
-    existing_orders = [x.get('order', 0) for x in ALL_EXPENSES if x.get('date', '').strip()[:7] == actual_month]
-    next_order = max(existing_orders) + 1 if existing_orders else 1
-    
-    for cat, amt in zip(categories, amounts):
-        if not cat or not amt: continue
-        new_item = {
-            "id": str(uuid.uuid4()),
-            "trip_id": trip_id,
-            "order": next_order,
-            "team": user_team,
-            "date": expense_date,
-            "user_name": user_name,
-            "place": place,
-            "content": content,
-            "category": cat,
-            "amount": int(amt)
-        }
-        ALL_EXPENSES.append(new_item)
-    
-    save_data()
-    return redirect(url_for('index_page', search_month=actual_month))
-
-@app.route('/expense/edit', methods=['POST'])
-def edit_expense():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    global ALL_EXPENSES
-    
-    trip_id = request.form.get('edit_trip_id')
-    expense_date = request.form.get('edit_date').strip()
-    user_name = request.form.get('edit_user_name')
-    place = request.form.get('edit_place')
-    content = request.form.get('edit_content')
-    
-    sub_ids = request.form.getlist('sub_receipt_ids')
-    sub_cats = request.form.getlist('sub_receipt_categories')
-    sub_amts = request.form.getlist('sub_receipt_amounts')
-    
-    sub_map = {}
-    for sid, scat, samt in zip(sub_ids, sub_cats, sub_amts):
-        sub_map[sid] = {'category': scat, 'amount': int(samt)}
+    user_team = session.get('team', '시운전팀')
+    if user_team == "관리자" and request.form.get('target_team'):
+        user_team = request.form.get('target_team')
         
-    for x in ALL_EXPENSES:
-        if x['trip_id'] == trip_id:
-            x['date'] = expense_date
-            x['user_name'] = user_name
-            x['place'] = place
-            x['content'] = content
+    # HTML 동적 입력 폼의 다중 데이터 수신 (getlist 메서드 사용)
+    receipt_categories = request.form.getlist('receipt_category')
+    receipt_amounts = request.form.getlist('receipt_amount')
+    
+    details = []
+    total_amount = 0
+    desc_parts = []
+    
+    for i in range(len(receipt_categories)):
+        cat = receipt_categories[i]
+        try:
+            amt = int(receipt_amounts[i]) if receipt_amounts[i] else 0
+        except ValueError:
+            amt = 0
             
-            sid = x['id']
-            if sid in sub_map:
-                x['category'] = sub_map[sid]['category']
-                x['amount'] = sub_map[sid]['amount']
-                
-    save_data()
-    actual_month = expense_date[:7]
-    return redirect(url_for('index_page', search_month=actual_month))
+        if cat and amt > 0:
+            rid = f"r_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
+            details.append({"id": rid, "category": cat, "amount": amt})
+            total_amount += amt
+            desc_parts.append(f"{cat}: {amt:,}원")
+            
+    items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
+    
+    new_id = str(len(MOCK_TRIPS) + 1)
+    new_order = len(MOCK_TRIPS) + 1
+    
+    MOCK_TRIPS.append({
+        "trip_id": new_id,
+        "order": new_order,
+        "team": user_team,
+        "date": expense_date,
+        "user": user_name,
+        "place": place,
+        "content": content,
+        "items_desc": items_desc,
+        "total_amount": total_amount,
+        "details_json": json.dumps(details, ensure_ascii=False)
+    })
+    
+    return redirect(url_for('index', search_month=search_month))
 
-@app.route('/expense/delete/<trip_id>')
-def delete_expense(trip_id):
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    global ALL_EXPENSES
-    search_month = request.args.get('search_month')
+@app.route('/expense/edit_submit', methods=['POST'])
+def edit_submit():
+    trip_id = request.form.get('trip_id')
+    date = request.form.get('date')
+    user = request.form.get('user')
+    place = request.form.get('place')
+    content = request.form.get('content')
+    search_month = request.form.get('search_month')
     
-    ALL_EXPENSES = [x for x in ALL_EXPENSES if x['trip_id'] != trip_id]
+    # 수정 모달 팝업 내부 다중 데이터 처리
+    sub_ids = request.form.getlist('sub_receipt_ids')
+    sub_categories = request.form.getlist('sub_receipt_categories')
+    sub_amounts = request.form.getlist('sub_receipt_amounts')
     
-    save_data()
-    return redirect(url_for('index_page', search_month=search_month))
+    for t in MOCK_TRIPS:
+        if t['trip_id'] == trip_id:
+            t['date'] = date
+            t['user'] = user
+            t['place'] = place
+            t['content'] = content
+            
+            new_details = []
+            total_amount = 0
+            desc_parts = []
+            
+            for i in range(len(sub_ids)):
+                try:
+                    amt = int(sub_amounts[i])
+                except:
+                    amt = 0
+                cat = sub_categories[i]
+                
+                new_details.append({"id": sub_ids[i], "category": cat, "amount": amt})
+                total_amount += amt
+                desc_parts.append(f"{cat}: {amt:,}원")
+                
+            t['total_amount'] = total_amount
+            t['items_desc'] = " | ".join(desc_parts)
+            t['details_json'] = json.dumps(new_details, ensure_ascii=False)
+            break
+            
+    return redirect(url_for('index', search_month=search_month))
 
 @app.route('/expense/reorder', methods=['POST'])
-def reorder_expenses():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    
+def reorder():
     trip_ids = request.form.getlist('trip_ids')
     search_month = request.form.get('search_month')
     
-    order_map = {tid: idx + 1 for idx, tid in enumerate(trip_ids)}
-    
-    for x in ALL_EXPENSES:
-        tid = x['trip_id']
-        if tid in order_map:
-            x['order'] = order_map[tid]
-            
-    save_data()
-    return redirect(url_for('index_page', search_month=search_month))
+    for index, tid in enumerate(trip_ids):
+        for t in MOCK_TRIPS:
+            if t['trip_id'] == tid:
+                t['order'] = index + 1
+                break
+                
+    return redirect(url_for('index', search_month=search_month))
 
-@app.route('/download/cover')
-def download_cover():
-    target_team = request.args.get('team', 'ALL')
-    target_month = request.args.get('month', datetime.date.today().strftime('%Y-%m'))
-    
-    if target_team == 'ALL':
-        raw_data = [x for x in ALL_EXPENSES if x.get('date', '').strip()[:7] == target_month[:7]]
-        display_team_title = "전사 통합"
-    else:
-        raw_data = [x for x in ALL_EXPENSES if is_match_team(x.get('team', ''), target_team) and x.get('date', '').strip()[:7] == target_month[:7]]
-        display_team_title = target_team
-        if not display_team_title.endswith('팀') and display_team_title != "시운전":
-            display_team_title += "팀"
+@app.route('/expense/delete/<trip_id>')
+def delete_expense(trip_id):
+    global MOCK_TRIPS
+    search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
+    MOCK_TRIPS = [t for t in MOCK_TRIPS if t['trip_id'] != trip_id]
+    return redirect(url_for('index', search_month=search_month))
 
-    raw_data.sort(key=lambda x: (x.get('order', 999), x.get('date', '')))
-    
-    aggregated = {}
-    for exp in raw_data:
-        key = (exp.get('date', ''), exp.get('content', ''), exp.get('place', ''), exp.get('user_name', ''), exp.get('team', ''))
-        amt = exp.get('amount', 0)
-        cat = exp.get('category', '기타')
-        
-        if key not in aggregated:
-            aggregated[key] = {
-                "date": key[0], "content": key[1], "place": key[2], "user_name": key[3], "team": key[4],
-                "total": 0, "교통비": 0, "식대비": 0, "숙박비": 0, "차량유지비": 0, "기타": 0
-            }
-            
-        aggregated[key]["total"] += amt
-        
-        if cat in ["교통비", "주차비", "교통/주차비"]:
-            aggregated[key]["교통비"] += amt
-        elif cat in ["식비", "식대비"]:
-            aggregated[key]["식대비"] += amt
-        elif cat == "숙박비":
-            aggregated[key]["숙박비"] += amt
-        elif cat == "차량유지비":
-            aggregated[key]["차량유지비"] += amt
-        else: 
-            aggregated[key]["기타"] += amt
-
-    sorted_cover_rows = list(aggregated.values())
-    
-    wb = openpyxl.Workbook()
-    
-    font_title = Font(name='맑은 고딕', size=18, bold=True, color='1E3A8A')
-    font_header = Font(name='맑은 고딕', size=11, bold=True)
-    font_main = Font(name='맑은 고딕', size=10)
-    font_sum = Font(name='맑은 고딕', size=11, bold=True)
-    
-    thin_border = Border(
-        left=Side(style='thin', color='A0AEC0'), right=Side(style='thin', color='A0AEC0'),
-        top=Side(style='thin', color='A0AEC0'), bottom=Side(style='thin', color='A0AEC0')
-    )
-    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
-    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
-    
-    align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
-    align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
-    align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
-
-    ws1 = wb.active
-    ws1.title = f"{target_month[5:7]}월 정산서"
-    ws1.views.sheetView[0].showGridLines = True
-    
-    ws1.merge_cells('A1:D2')
-    ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
-    ws1['A1'].font = font_title
-    ws1['A1'].alignment = Alignment(horizontal='left', vertical='center')
-
-    approve_headers = ["작성", "검토", "검토", "승인"]
-    for i, h in enumerate(approve_headers):
-        col_idx = 8 + i
-        cell = ws1.cell(row=1, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-        cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
-        ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
-        for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
-        
-    ws1.row_dimensions[1].height = 24
-    ws1.row_dimensions[2].height = 24
-    ws1.row_dimensions[3].height = 24
-
-    ws1.merge_cells('A4:D4')
-    ws1['A4'] = f"작성일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
-    ws1['A4'].font = font_main
-    ws1.row_dimensions[4].height = 24
-
-    headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)", "교통비", "식대비", "숙박비", "차량유지비", "기타", "사용자"]
-    for col_idx, h in enumerate(headers1, 1):
-        cell = ws1.cell(row=5, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws1.row_dimensions[5].height = 32
-
-    r_idx = 6
-    for idx, row_data in enumerate(sorted_cover_rows, 1):
-        ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
-        ws1.cell(row=r_idx, column=2, value=row_data['date'][5:]).alignment = align_center
-        display_content = f"[{row_data['team']}] {row_data['content']}" if target_team == 'ALL' else row_data['content']
-        ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
-        ws1.cell(row=r_idx, column=4, value=row_data['place']).alignment = align_center
-        
-        t_cell = ws1.cell(row=r_idx, column=5, value=row_data['total'])
-        t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
-        
-        categories_keys = ["교통비", "식대비", "숙박비", "차량유지비", "기타"]
-        for c_idx, cat_name in enumerate(categories_keys, 6):
-            v_cell = ws1.cell(row=r_idx, column=c_idx)
-            v_cell.value = row_data[cat_name] if row_data[cat_name] > 0 else ""
-            v_cell.number_format = '#,##0'; v_cell.alignment = align_right
-            
-        ws1.cell(row=r_idx, column=11, value=row_data['user_name']).alignment = align_center
-        
-        for c in range(1, 12):
-            cell = ws1.cell(row=r_idx, column=c)
-            if c != 5: cell.font = font_main
-            cell.border = thin_border
-            
-        ws1.row_dimensions[r_idx].height = 28
-        r_idx += 1
-
-    sum_row_idx = r_idx
-    ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
-    ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
-    ws1.cell(row=sum_row_idx, column=1).alignment = align_center
-    
-    for c in range(1, 12):
-        cell = ws1.cell(row=sum_row_idx, column=c)
-        cell.border = thin_border; cell.fill = fill_sum
-    
-    for c in range(5, 11):
-        col_letter = openpyxl.utils.get_column_letter(c)
-        sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
-        sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
-        
-    ws1.cell(row=sum_row_idx, column=11).alignment = align_center
-    ws1.row_dimensions[sum_row_idx].height = 30
-
-    budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000, "시운전": 1000000}
-    team_budget = budget_map.get(display_team_title, 0) if target_team != 'ALL' else 0
-    budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
-    
-    r_idx += 2
-    ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=11)
-    summary_cell = ws1.cell(row=r_idx, column=1)
-    
-    if team_budget > 0:
-        summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
-    else:
-        summary_cell.value = f'="전체 통합 경비 합계액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ] 원"'
-        
-    summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
-    summary_cell.alignment = align_center
-    ws1.row_dimensions[r_idx].height = 36
-
-    widths1 = {1: 5, 2: 10, 3: 35, 4: 15, 5: 12, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10}
-    for col_idx, w in widths1.items():
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
-
-    # 두 번째 시트: 상세내역
-    ws2 = wb.create_sheet(title="상세내역")
-    ws2.views.sheetView[0].showGridLines = True
-    
-    ws2.merge_cells('A1:C2')
-    ws2['A1'] = "지출 항목별 상세 증빙내역"
-    ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
-    ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
-    
-    ws2.row_dimensions[1].height = 20
-    ws2.row_dimensions[4].height = 28
-    
-    headers2 = ["순번", "사용일자", "부서명", "성명", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
-    for col_idx, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=4, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-        
-    d_idx = 5
-    for idx, exp in enumerate(raw_data, 1):
-        ws2.cell(row=d_idx, column=1, value=idx).alignment = align_center
-        ws2.cell(row=d_idx, column=2, value=exp.get('date', '')[5:]).alignment = align_center
-        ws2.cell(row=d_idx, column=3, value=exp.get('team', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=4, value=exp.get('user_name', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=5, value=exp.get('category', '')).alignment = align_center
-        ws2.cell(row=d_idx, column=6, value=exp.get('content', '')).alignment = align_left
-        ws2.cell(row=d_idx, column=7, value=exp.get('place', '')).alignment = align_center
-        
-        amt_cell = ws2.cell(row=d_idx, column=8, value=exp.get('amount', 0))
-        amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
-        
-        ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
-        
-        for c in range(1, 10):
-            cell = ws2.cell(row=d_idx, column=c)
-            cell.border = thin_border
-            cell.font = font_main
-            
-        ws2.row_dimensions[d_idx].height = 24
-        d_idx += 1
-        
-    ws2.merge_cells(start_row=d_idx, start_column=1, end_row=d_idx, end_column=7)
-    ws2.cell(row=d_idx, column=1, value="총 상세 지출액 합계").font = font_sum
-    ws2.cell(row=d_idx, column=1).alignment = align_center
-    
-    for c in range(1, 10):
-        cell = ws2.cell(row=d_idx, column=c)
-        cell.border = thin_border; cell.fill = fill_sum
-        
-    sum_cell2 = ws2.cell(row=d_idx, column=8, value=f"=SUM(H5:H{d_idx-1})")
-    sum_cell2.font = font_sum; sum_cell2.number_format = '#,##0'; sum_cell2.alignment = align_right
-    ws2.row_dimensions[d_idx].height = 26
-    
-    widths2 = [5, 11, 12, 10, 12, 32, 15, 14, 12]
-    for i, w in enumerate(widths2, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    filename = f"정산서_{target_team}_{target_month}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route('/backup/download')
-def backup_download():
-    if os.path.exists(DATA_FILE):
-        return send_file(DATA_FILE, as_attachment=True, download_name="expenses_backup.json")
-    return "백업 파일이 없습니다.", 404
-
-@app.route('/backup/upload', methods=['POST'])
-def backup_upload():
-    if 'file' not in request.files:
-        return "파일이 없습니다."
-    file = request.files['file']
-    if file.filename == '':
-        return "파일을 선택해주세요."
-    
-    file.save(DATA_FILE)
-    
-    global ALL_EXPENSES
-    ALL_EXPENSES = load_data()
-    
-    return "<script>alert('데이터 복구가 완료되었습니다!'); location.href='/index';</script>"
+@app.route('/logout')
+def logout():
+    session.clear()
+    return "로그아웃 되었습니다."
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True, port=5000)
