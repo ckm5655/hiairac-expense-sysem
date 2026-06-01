@@ -195,7 +195,7 @@ def edit_submit():
 @app.route('/expense/reorder', methods=['POST'])
 def reorder():
     trip_ids = request.form.getlist('trip_ids')
-    search_month = request.form.get('search_month')
+    search_month = request.form.get('search_month') 
     
     for index, tid in enumerate(trip_ids):
         for t in MOCK_TRIPS:
