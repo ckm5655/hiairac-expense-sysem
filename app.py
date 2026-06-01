@@ -218,4 +218,8 @@ def logout():
     return "로그아웃 되었습니다."
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    import os
+    # 클라우드 서버가 지정하는 포트를 우선 사용하도록 설정
+    port = int(os.environ.get("PORT", 5000))
+    # 외부(클라우드)에서 접속할 수 있도록 host를 "0.0.0.0"으로 개방
+    app.run(host="0.0.0.0", port=port, debug=False)
