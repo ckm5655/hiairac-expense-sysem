@@ -6,7 +6,7 @@ from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
 from io import BytesIO
-import gspread  # 구글 시트 연동 라이브러리 추가
+import gspread
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
@@ -23,8 +23,8 @@ CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
-# 여기에 아까 복사해둔 구글 시트 URL 전체를 붙여넣으세요!
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
+
 try:
     gc = gspread.service_account(filename='credentials.json')
     doc = gc.open_by_url(SHEET_URL)
@@ -37,7 +37,6 @@ except Exception as e:
 HEADERS = ["trip_id", "order", "team", "date", "user", "place", "content", "items_desc", "total_amount", "details_json"]
 
 def get_all_trips():
-    """구글 시트에서 모든 데이터를 가져와 정렬합니다."""
     if not ws: return []
     try:
         records = ws.get_all_records()
@@ -51,7 +50,6 @@ def get_all_trips():
         return []
 
 def save_all_trips(trips_list):
-    """변경된 데이터를 구글 시트에 덮어씁니다 (완벽 동기화)"""
     if not ws: return
     values = [HEADERS] + [[t.get(h, "") for h in HEADERS] for t in trips_list]
     ws.clear()
@@ -110,7 +108,6 @@ def index():
     month_start_date = f"{current_month}-01"
     month_end_date = f"{current_month}-31"
     
-    # DB(구글시트)에서 데이터 실시간 로드
     ALL_TRIPS = get_all_trips()
     
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
@@ -142,8 +139,9 @@ def index():
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
-    expense_date = request.form.get('date') # form name 일치
-    user_name = request.form.get('user')
+    # 📌 날짜와 이름이 빈칸으로 저장되던 치명적 에러 완벽 수정!
+    expense_date = request.form.get('expense_date') 
+    user_name = request.form.get('user_name')       
     place = request.form.get('place')
     content = request.form.get('content')
     search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
@@ -168,6 +166,7 @@ def add_expense():
     items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
     
     ALL_TRIPS = get_all_trips()
+    
     new_trip = {
         "trip_id": str(uuid.uuid4().hex[:8]), "order": len(ALL_TRIPS) + 1,
         "team": user_team, "date": expense_date, "user": user_name,
@@ -175,10 +174,8 @@ def add_expense():
         "total_amount": total_amount, "details_json": json.dumps(details, ensure_ascii=False)
     }
     
-    # 구글 시트에 새 줄 추가
-    if ws:
-        row_data = [new_trip.get(h, "") for h in HEADERS]
-        ws.append_row(row_data)
+    ALL_TRIPS.append(new_trip)
+    save_all_trips(ALL_TRIPS) 
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -212,7 +209,7 @@ def edit_submit():
             t['details_json'] = json.dumps(new_details, ensure_ascii=False)
             break
             
-    save_all_trips(ALL_TRIPS) # 구글 시트 덮어쓰기
+    save_all_trips(ALL_TRIPS)
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/expense/reorder', methods=['POST'])
