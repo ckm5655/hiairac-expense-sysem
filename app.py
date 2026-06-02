@@ -23,6 +23,7 @@ CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
+# 여기에 아까 복사해둔 구글 시트 URL 전체를 붙여넣으세요!
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
 
 try:
@@ -139,7 +140,6 @@ def index():
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
-    # 📌 날짜와 이름이 빈칸으로 저장되던 치명적 에러 완벽 수정!
     expense_date = request.form.get('expense_date') 
     user_name = request.form.get('user_name')       
     place = request.form.get('place')
@@ -368,11 +368,14 @@ def download_cover():
     summary_cell.alignment = align_center
     ws1.row_dimensions[r_idx].height = 36
 
-    widths1 = {1: 5, 2: 5, 3: 30}
-    for i in range(4, 13): widths1[i] = 10
+    # 📌 요청하신 엑셀 열 너비 반영 구간 (A=1, B=2, C=3 ...)
+    widths1 = {1: 4, 2: 4, 3: 40, 4: 6} 
+    for i in range(5, 13): widths1[i] = 9 # E열(5)부터 L열(12)까지 너비 9
+    
     for col_idx, w in widths1.items():
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
+    # ------------------ 시트 2: 상세내역 ------------------
     ws2 = wb.create_sheet(title="상세내역")
     ws2.merge_cells('A1:C2')
     ws2['A1'] = "지출 항목별 상세 증빙내역"
