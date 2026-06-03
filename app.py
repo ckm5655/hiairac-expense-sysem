@@ -1,432 +1,518 @@
-from flask import Flask, render_template, request, redirect, url_for, session, send_file
-import json
+import streamlit as st
+import pandas as pd
 import os
-import uuid
-from datetime import datetime
-import openpyxl
-from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
-from io import BytesIO
+from datetime import datetime, timedelta
+import calendar
+import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import io
 import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
+# --- [구글 시트 연동 설정] ---
+CREDENTIALS_FILE = "credentials.json"  # 구글 API JSON 키 파일 이름
+SPREADSHEET_NAME = "vacation_data"     # 구글 스프레드시트 파일 이름
 
-USER_CREDENTIALS = {
-    "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
-    "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
-    "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
-    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
-    "전장": {"password": "1234", "name": "전장", "team": "전장팀"}
-}
-CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
+# --- [사내 아웃룩 연동] 메일 발송을 위한 핵심 설정 ---
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SENDER_EMAIL = "ckm5655@gmail.com"
+SENDER_PASSWORD = "qoycvfxxcexgoygb"
 
-# ==========================================
-# 🌟 구글 스프레드시트 DB 연동 설정 🌟
-# ==========================================
-# 여기에 아까 복사해둔 구글 시트 URL 전체를 붙여넣으세요!
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
+def get_gspread_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    client = gspread.authorize(creds)
+    return client
 
-try:
-    gc = gspread.service_account(filename='credentials.json')
-    doc = gc.open_by_url(SHEET_URL)
-    ws = doc.sheet1
-    print("✅ 구글 스프레드시트 연결 성공!")
-except Exception as e:
-    print("❌ 구글 시트 연결 실패! credentials.json 파일과 시트 공유 상태를 확인하세요:", e)
-    ws = None
-
-HEADERS = ["trip_id", "order", "team", "date", "user", "place", "content", "items_desc", "total_amount", "details_json"]
-
-def get_all_trips():
-    if not ws: return []
+def load_data():
+    if not os.path.exists(CREDENTIALS_FILE):
+        st.error(f"❌ '{CREDENTIALS_FILE}' 파일이 없습니다. 구글 API 키를 먼저 설정해주세요.")
+        st.stop()
     try:
-        records = ws.get_all_records()
-        for r in records:
-            r['order'] = int(r.get('order') if r.get('order') else 999)
-            r['total_amount'] = int(r.get('total_amount') if r.get('total_amount') else 0)
-            r['trip_id'] = str(r.get('trip_id', ''))
-        return sorted(records, key=lambda x: x['order'])
+        client = get_gspread_client()
+        sheet = client.open(SPREADSHEET_NAME)
+        
+        # Employees 데이터 로드
+        ws_emp = sheet.worksheet("Employees")
+        df_emp = pd.DataFrame(ws_emp.get_all_records())
+        if not df_emp.empty:
+            df_emp['ID'] = df_emp['ID'].astype(str)
+            df_emp['PASSWORD'] = df_emp['PASSWORD'].astype(str)
+            numeric_cols = ['연차기초', '사용', '연차계획', '연차잔액']
+            for col in numeric_cols:
+                if col in df_emp.columns:
+                    df_emp[col] = pd.to_numeric(df_emp[col].replace('', 0), errors='coerce').astype(float)
+        
+        # PLANS 데이터 로드
+        ws_plans = sheet.worksheet("PLANS")
+        df_plans = pd.DataFrame(ws_plans.get_all_records())
+        if not df_plans.empty:
+            df_plans['Date'] = df_plans['Date'].astype(str)
+            df_plans['Emp_ID'] = df_plans['Emp_ID'].astype(str)
+            
+        for col in ["Reason", "Manager_Sign"]:
+            if col not in df_plans.columns:
+                df_plans[col] = ""
+            else:
+                df_plans[col] = df_plans[col].fillna("").astype(str)
+                
+        return df_emp, df_plans
     except Exception as e:
-        print("데이터 로드 에러:", e)
-        return []
+        st.error(f"❌ 구글 시트 로드 오류: {e}")
+        st.stop()
 
-def save_all_trips(trips_list):
-    if not ws: return
-    values = [HEADERS] + [[t.get(h, "") for h in HEADERS] for t in trips_list]
-    ws.clear()
-    ws.update(values=values, range_name="A1")
+def load_notices():
+    try:
+        client = get_gspread_client()
+        sheet = client.open(SPREADSHEET_NAME)
+        ws_notices = sheet.worksheet("NOTICES")
+        df_notices = pd.DataFrame(ws_notices.get_all_records())
+        if df_notices.empty:
+            return pd.DataFrame(columns=["ID", "날짜", "제목", "내용"])
+        return df_notices
+    except:
+        return pd.DataFrame(columns=["ID", "날짜", "제목", "내용"])
 
-def is_match_team(db_team, target_team):
-    if not db_team or not target_team: return False
-    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
-
-# ==========================================
-# 라우팅 (페이지 기능)
-# ==========================================
-
-@app.route('/')
-def login_page():
-    if 'username' in session: return redirect(url_for('index'))
-    html = """
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>경비 정산 로그인</title>
-    <style>
-        body { font-family: '맑은 고딕', sans-serif; background: #f0f4f8; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; width: 300px; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { width: 100%; padding: 12px; background: #1e3a8a; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 15px; }
-    </style>
-    </head><body>
-    <div class="login-box">
-        <h2 style="color:#1e3a8a; margin-bottom:20px;">경비 정산 시스템</h2>
-        <form action="/login" method="post">
-            <input type="text" name="username" placeholder="아이디 (예: admin, 시운전)" required>
-            <input type="password" name="password" placeholder="비밀번호" required>
-            <button type="submit">로그인</button>
-        </form>
-    </div>
-    </body></html>
-    """
-    return html
-
-@app.route('/login', methods=['POST'])
-def do_login():
-    uid = request.form.get('username')
-    upass = request.form.get('password')
-    if uid in USER_CREDENTIALS and USER_CREDENTIALS[uid]['password'] == upass:
-        session['user_id'] = uid
-        session['username'] = USER_CREDENTIALS[uid]['name']
-        session['team'] = USER_CREDENTIALS[uid]['team']
-        return redirect(url_for('index'))
-    return "<script>alert('아이디 또는 비밀번호가 올바르지 않습니다.'); history.back();</script>"
-
-@app.route('/index')
-def index():
-    if 'username' not in session: return redirect(url_for('login_page'))
-    username = session.get('username', '게스트')
-    team = session.get('team', '시운전팀')
-    
-    current_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
-    month_start_date = f"{current_month}-01"
-    month_end_date = f"{current_month}-31"
-    
-    ALL_TRIPS = get_all_trips()
-    
-    filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
-    raw_stats_list = []
-    dashboard_stats = {'총합': 0, '시운전팀': 0, '생산팀': 0, '영업팀': 0, '전장팀': 0}
-    
-    for t in ALL_TRIPS:
-        try: details = json.loads(t.get('details_json', '[]'))
-        except: details = []
-        for item in details:
-            stat_item = {
-                "date": t.get('date', ''), "team": t.get('team', ''),
-                "place": t.get('place', ''), "user": t.get('user', '알수없음'), 
-                "category": item.get('category', '기타'), "amount": int(item.get('amount', 0))
-            }
-            raw_stats_list.append(stat_item)
-            
-            if str(t.get('date', '')).startswith(current_month):
-                amt = int(item.get('amount', 0))
-                dashboard_stats['총합'] += amt
-                raw_team = str(t.get('team', '')).strip()
-                std_team = '시운전팀' if raw_team == '시운전' else (raw_team + '팀' if not raw_team.endswith('팀') and raw_team != '관리자' else raw_team)
-                if std_team in dashboard_stats:
-                    dashboard_stats[std_team] += amt
-
-    return render_template('index.html', username=username, team=team, current_month=current_month,
-        month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
-        categories=CATEGORIES, dashboard_stats=dashboard_stats, raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False))
-
-@app.route('/expense/add', methods=['POST'])
-def add_expense():
-    expense_date = request.form.get('expense_date') 
-    user_name = request.form.get('user_name')       
-    place = request.form.get('place')
-    content = request.form.get('content')
-    search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
-    
-    user_team = session.get('team', '시운전팀')
-    if user_team == "관리자" and request.form.get('target_team'):
-        user_team = request.form.get('target_team')
+def save_all_data(df_emp, df_plans, df_notices):
+    try:
+        client = get_gspread_client()
+        sheet = client.open(SPREADSHEET_NAME)
         
-    receipt_cats = request.form.getlist('receipt_category')
-    receipt_amts = request.form.getlist('receipt_amount')
-    
-    details, total_amount, desc_parts = [], 0, []
-    for i in range(len(receipt_cats)):
-        cat = receipt_cats[i]
-        try: amt = int(receipt_amts[i]) if receipt_amts[i] else 0
-        except: amt = 0
-        if cat and amt > 0:
-            details.append({"id": f"r_{uuid.uuid4().hex[:6]}", "category": cat, "amount": amt})
-            total_amount += amt
-            desc_parts.append(f"{cat}: {amt:,}원")
-            
-    items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
-    
-    ALL_TRIPS = get_all_trips()
-    
-    new_trip = {
-        "trip_id": str(uuid.uuid4().hex[:8]), "order": len(ALL_TRIPS) + 1,
-        "team": user_team, "date": expense_date, "user": user_name,
-        "place": place, "content": content, "items_desc": items_desc,
-        "total_amount": total_amount, "details_json": json.dumps(details, ensure_ascii=False)
-    }
-    
-    ALL_TRIPS.append(new_trip)
-    save_all_trips(ALL_TRIPS) 
+        # 데이터프레임의 결측치(NaN)를 빈 문자열로 변환하고, JSON 오류 방지를 위해 모든 데이터를 문자열로 캐스팅
+        df_emp_clean = df_emp.fillna("").astype(str)
+        df_plans_clean = df_plans.fillna("").astype(str)
+        df_notices_clean = df_notices.fillna("").astype(str)
+
+        # 1. Employees 업데이트
+        ws_emp = sheet.worksheet("Employees")
+        ws_emp.clear()
+        ws_emp.update([df_emp_clean.columns.values.tolist()] + df_emp_clean.values.tolist())
+
+        # 2. PLANS 업데이트
+        ws_plans = sheet.worksheet("PLANS")
+        ws_plans.clear()
+        ws_plans.update([df_plans_clean.columns.values.tolist()] + df_plans_clean.values.tolist())
+
+        # 3. NOTICES 업데이트
+        ws_notices = sheet.worksheet("NOTICES")
+        ws_notices.clear()
+        ws_notices.update([df_notices_clean.columns.values.tolist()] + df_notices_clean.values.tolist())
         
-    return redirect(url_for('index', search_month=search_month))
+    except Exception as e:
+        st.error(f"❌ 구글 시트 저장 실패: {e}")
 
-@app.route('/expense/edit_submit', methods=['POST'])
-def edit_submit():
-    trip_id = request.form.get('trip_id')
-    search_month = request.form.get('search_month')
-    sub_ids = request.form.getlist('sub_receipt_ids')
-    sub_categories = request.form.getlist('sub_receipt_categories')
-    sub_amounts = request.form.getlist('sub_receipt_amounts')
-    
-    ALL_TRIPS = get_all_trips()
-    for t in ALL_TRIPS:
-        if str(t.get('trip_id')) == str(trip_id):
-            t['date'] = request.form.get('date')
-            t['user'] = request.form.get('user')
-            t['place'] = request.form.get('place')
-            t['content'] = request.form.get('content')
-            
-            new_details, total_amount, desc_parts = [], 0, []
-            for i in range(len(sub_ids)):
-                try: amt = int(sub_amounts[i])
-                except: amt = 0
-                cat = sub_categories[i]
-                new_details.append({"id": sub_ids[i], "category": cat, "amount": amt})
-                total_amount += amt
-                desc_parts.append(f"{cat}: {amt:,}원")
-                
-            t['total_amount'] = total_amount
-            t['items_desc'] = " | ".join(desc_parts)
-            t['details_json'] = json.dumps(new_details, ensure_ascii=False)
-            break
-            
-    save_all_trips(ALL_TRIPS)
-    return redirect(url_for('index', search_month=search_month))
+def save_data(df_emp, df_plans):
+    save_all_data(df_emp, df_plans, load_notices())
 
-@app.route('/expense/reorder', methods=['POST'])
-def reorder():
-    trip_ids = request.form.getlist('trip_ids')
-    search_month = request.form.get('search_month')
-    ALL_TRIPS = get_all_trips()
-    
-    for index, tid in enumerate(trip_ids):
-        for t in ALL_TRIPS:
-            if str(t.get('trip_id')) == str(tid):
-                t['order'] = index + 1
-                break
-                
-    save_all_trips(ALL_TRIPS)
-    return redirect(url_for('index', search_month=search_month))
+def save_notices(df_notices):
+    df_emp, df_plans = load_data()
+    save_all_data(df_emp, df_plans, df_notices)
 
-@app.route('/expense/delete/<trip_id>')
-def delete_expense(trip_id):
-    search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
-    ALL_TRIPS = get_all_trips()
-    ALL_TRIPS = [t for t in ALL_TRIPS if str(t.get('trip_id')) != str(trip_id)]
-    
-    save_all_trips(ALL_TRIPS)
-    return redirect(url_for('index', search_month=search_month))
+df_emp, df_plans = load_data()
 
-@app.route('/download/cover')
-def download_cover():
-    target_team = request.args.get('team', 'ALL')
-    target_month = request.args.get('month', datetime.now().strftime('%Y-%m'))
-    ALL_TRIPS = get_all_trips()
-    
-    if target_team == 'ALL':
-        raw_data = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(target_month)]
-        display_team_title = "전사 통합"
+def send_vacation_email(user_email, user_name, target_date):
+    subject = f"[스마트연차시스템] {user_name}님, 7일 후 연차(예정일: {target_date}) 안내드립니다."
+    body = f"""안녕하세요.
+곧 예정된 연차 일정을 미리 안내드립니다.
+
+■ 대상자 : {user_name} 사원
+■ 사용일자 : {target_date}
+
+연차 사용 전 진행 중인 업무 및 인수인계 사항을 최종 확인하여 주시기 바랍니다.
+긴급사항 발생 시 부서 내 담당자와 공유 부탁드립니다.
+감사합니다."""
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = user_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, user_email, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        return False
+
+st.set_page_config(page_title="사내 연차 관리 시스템", layout="wide")
+
+if 'logged_in' not in st.session_state:
+    st.session_state.update({'logged_in': False, 'user_info': None})
+
+if not st.session_state['logged_in']:
+    st.title("🔐 사내 연차 관리 시스템")
+    with st.form("login"):
+        i_id, i_pw = st.text_input("ID(사번)"), st.text_input("비밀번호", type="password")
+        if st.form_submit_button("로그인"):
+            user = df_emp[(df_emp['ID'] == i_id) & (df_emp['PASSWORD'] == i_pw)]
+            if not user.empty:
+                st.session_state.update({'logged_in': True, 'user_info': user.iloc[0]})
+                st.rerun()
+            else: st.error("정보가 올바르지 않습니다.")
+    st.stop()
+
+user_info = df_emp[df_emp['ID'] == st.session_state['user_info']['ID']].iloc[0]
+
+st.sidebar.title(f"👤 {user_info['이름']} ({user_info['permission']})")
+menu = ["📢 공지사항(연차촉진)", "🏠 내 연차 신청/현황", "📑 신청서 출력"]
+if user_info['permission'] in ["팀장", "총괄"]:
+    menu += ["✅ 팀원 승인/반려 관리", "📅 연차 현황 달력", "📊 부서/전사 모니터링"]
+if user_info['permission'] == "총괄":
+    menu += ["🌐 [총괄] 전사 통합 관리"]
+
+choice = st.sidebar.radio("메뉴 이동", menu)
+if st.sidebar.button("로그아웃"):
+    st.session_state['logged_in'] = False
+    st.rerun()
+
+# --- 📢 공지사항 ---
+if choice == "📢 공지사항(연차촉진)":
+    st.header("📢 전사 공지사항 (연차촉진 안내)")
+    df_notices = load_notices()
+    if df_notices.empty:
+        st.info("현재 등록된 공지사항이 없습니다.")
     else:
-        raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
-        display_team_title = target_team
+        for idx, row in df_notices.iloc[::-1].iterrows():
+            with st.expander(f"📌 [{row['날짜']}] {row['제목']}", expanded=True):
+                st.write(row['내용'])
+                st.caption("작성자: 최고관리자(총괄)")
 
-    raw_data.sort(key=lambda x: (int(x.get('order', 999)), str(x.get('date', ''))))
-    wb = openpyxl.Workbook()
+# --- 🏠 내 연차 신청/현황 ---
+elif choice == "🏠 내 연차 신청/현황":
+    st.header("📅 나의 연차 현황")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("기초 연차", f"{user_info['연차기초']}일")
+    c2.metric("사용 완료", f"{user_info['사용']}일")
+    c3.metric("연차 계획", f"{user_info['연차계획']}일")
+    c4.metric("남은 잔액", f"{user_info['연차잔액']}일")
+    st.divider()
     
-    font_title = Font(name='맑은 고딕', size=18, bold=True, color='000080')
-    font_header = Font(name='맑은 고딕', size=11, bold=True)
-    font_main = Font(name='맑은 고딕', size=10)
-    font_sum = Font(name='맑은 고딕', size=11, bold=True)
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
-    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
-    align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
-    align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
-    align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
-
-    ws1 = wb.active
-    ws1.title = f"{target_month[5:7]}월 정산서"
-    ws1.merge_cells('A1:E2')
-    ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
-    ws1['A1'].font = font_title; ws1['A1'].alignment = align_left
-
-    display_categories = ["교통비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
-    headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)"] + display_categories + ["사용자"]
-
-    approve_headers = ["작성", "검토", "검토", "승인"]
-    for i, h in enumerate(approve_headers):
-        col_idx = 9 + i 
-        cell = ws1.cell(row=1, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-        cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
-        ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
-        for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
+    col_l, col_r = st.columns([1, 2])
+    with col_l:
+        st.subheader("📝 신규 신청")
+        v_date = st.date_input("날짜 선택")
+        v_type = st.selectbox("구분", ["연차", "오전반차", "오후반차", "연차계획"])
+        v_reason = st.text_input("✍️ 신청 사유", placeholder="예: 개인 용무, 정기 휴가 등")
         
-    ws1.row_dimensions[1].height = 24
-    ws1.row_dimensions[2].height = 24
-    ws1.row_dimensions[3].height = 24
+        if st.button("신청서 제출하기"):
+            d_str = v_date.strftime("%Y-%m-%d")
+            dup_check = df_plans[(df_plans['Emp_ID'] == user_info['ID']) & (df_plans['Date'] == d_str) & (df_plans['Status'] != '반려')]
+            if not dup_check.empty:
+                st.error(f"❌ {d_str} 날짜에 이미 신청(대기/승인)된 내역이 있습니다.")
+            else:
+                final_reason = v_reason if v_reason.strip() else "개인 용무"
+                st.session_state.update({'confirm_apply': True, 'temp_date': d_str, 'temp_type': v_type, 'temp_reason': final_reason})
 
-    ws1.merge_cells('A4:E4')
-    ws1['A4'] = f"작성일자: {datetime.now().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
-    ws1['A4'].font = font_main
-    ws1.row_dimensions[4].height = 24
+        if st.session_state.get('confirm_apply'):
+            st.warning(f"⚠️ {st.session_state['temp_date']} [{st.session_state['temp_type']}] 신청하시겠습니까?")
+            if st.button("✅ 최종 확인"):
+                new_id = int(df_plans["ID"].max() + 1) if not df_plans.empty else 1
+                new_row = {"ID": new_id, "Emp_ID": user_info['ID'], "Date": st.session_state['temp_date'], "Status": "대기", "Type": st.session_state['temp_type'], "Reason": st.session_state['temp_reason'], "Manager_Sign": ""}
+                df_plans = pd.concat([df_plans, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(df_emp, df_plans); st.success("신청되었습니다!"); del st.session_state['confirm_apply']; st.rerun()
 
-    for col_idx, h in enumerate(headers1, 1):
-        cell = ws1.cell(row=5, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws1.row_dimensions[5].height = 32
+    with col_r:
+        st.subheader("🔍 나의 최근 신청 내역")
+        my_h = df_plans[df_plans['Emp_ID'] == user_info['ID']].sort_values(by="Date", ascending=False)
+        for idx, row in my_h.iterrows():
+            cols = st.columns([3, 2, 2])
+            cols[0].write(f"📅 {row['Date']} ({row['Type']})")
+            cols[1].write(f"상태: {row['Status']}")
+            if row['Type'] == "연차계획" and cols[2].button("연차로 변경", key=f"btn_{row['ID']}"):
+                df_plans.at[idx, "Type"] = "연차"
+                if row['Status'] == "승인":
+                    df_emp.loc[df_emp["ID"] == user_info['ID'], ["사용","연차잔액","연차계획"]] += [1.0, -1.0, -1.0]
+                save_data(df_emp, df_plans); st.rerun()
 
-    r_idx = 6
-    for idx, trip in enumerate(raw_data, 1):
-        ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
-        raw_date = str(trip.get('date', ''))
-        ws1.cell(row=r_idx, column=2, value=raw_date[-2:] if len(raw_date)>=10 else raw_date).alignment = align_center
-        
-        display_content = f"[{trip['team']}] {trip['content']}" if target_team == 'ALL' else trip.get('content', '')
-        ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
-        ws1.cell(row=r_idx, column=4, value=trip.get('place', '')).alignment = align_center
-        
-        t_cell = ws1.cell(row=r_idx, column=5, value=int(trip.get('total_amount', 0)))
-        t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
-        
-        cat_sums = {c: 0 for c in display_categories}
-        try:
-            details = json.loads(trip.get('details_json', '[]'))
-            for item in details:
-                c_name = item.get('category', '기타')
-                amt = int(item.get('amount', 0))
-                if c_name in ['교통비', '주차비']: cat_sums['교통비'] += amt
-                elif c_name in ['운반비', '기타']: cat_sums['기타'] += amt
-                elif c_name in cat_sums: cat_sums[c_name] += amt
-                else: cat_sums['기타'] += amt
-        except: pass
-        
-        for c_idx, cat_name in enumerate(display_categories, 6):
-            v_cell = ws1.cell(row=r_idx, column=c_idx)
-            v_cell.value = cat_sums[cat_name] if cat_sums[cat_name] > 0 else ""
-            v_cell.number_format = '#,##0'; v_cell.alignment = align_right
-            
-        ws1.cell(row=r_idx, column=12, value=trip.get('user', '')).alignment = align_center
-        
-        for c in range(1, len(headers1)+1):
-            cell = ws1.cell(row=r_idx, column=c)
-            if c != 5: cell.font = font_main
-            cell.border = thin_border
-            
-        ws1.row_dimensions[r_idx].height = 28
-        r_idx += 1
-
-    sum_row_idx = r_idx
-    ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
-    ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
-    ws1.cell(row=sum_row_idx, column=1).alignment = align_center
-    
-    for c in range(1, len(headers1)+1):
-        ws1.cell(row=sum_row_idx, column=c).border = thin_border
-        ws1.cell(row=sum_row_idx, column=c).fill = fill_sum
-    
-    for c in range(5, 12):
-        col_letter = openpyxl.utils.get_column_letter(c)
-        sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
-        sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
-        
-    ws1.row_dimensions[sum_row_idx].height = 30
-
-    budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000}
-    team_budget = budget_map.get(display_team_title, 0) if target_team != 'ALL' else 0
-    budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
-    
-    r_idx += 2
-    ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
-    summary_cell = ws1.cell(row=r_idx, column=1)
-    
-    if team_budget > 0:
-        summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
+# --- 📑 신청서 출력 ---
+elif choice == "📑 신청서 출력":
+    st.header("🖨️ 연차 신청서 출력")
+    approved_h = df_plans[(df_plans['Emp_ID'] == user_info['ID']) & (df_plans['Status'] == '승인')]
+    if approved_h.empty:
+        st.info("출력 가능한 승인된 연차 내역이 없습니다.")
     else:
-        summary_cell.value = f'="전체 통합 경비 합계액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ] 원"'
+        doc_list = approved_h.apply(lambda x: f"[{x['ID']}] {x['Date']} ({x['Type']})", axis=1).tolist()
+        s_doc = st.selectbox("출력할 항목을 선택하세요", doc_list)
+        s_id = int(s_doc.split(']')[0].replace('[', ''))
+        doc = approved_h[approved_h['ID'] == s_id].iloc[0]
         
-    summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
-    summary_cell.alignment = align_center
-    ws1.row_dimensions[r_idx].height = 36
-
-    # 📌 요청하신 엑셀 열 너비 반영 구간 (A=1, B=2, C=3 ...)
-    widths1 = {1: 4, 2: 4, 3: 40, 4: 6} 
-    for i in range(5, 13): widths1[i] = 9 # E열(5)부터 L열(12)까지 너비 9
-    
-    for col_idx, w in widths1.items():
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
-
-    # ------------------ 시트 2: 상세내역 ------------------
-    ws2 = wb.create_sheet(title="상세내역")
-    ws2.merge_cells('A1:C2')
-    ws2['A1'] = "지출 항목별 상세 증빙내역"
-    ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
-    ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
-    
-    headers2 = ["순번", "사용일자", "부서명", "사용자", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
-    for col_idx, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=4, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+        print_reason = doc['Reason'] if pd.notna(doc.get('Reason')) and str(doc.get('Reason')).strip() != "" else "개인 용무"
+        print_sign = doc['Manager_Sign'] if pd.notna(doc.get('Manager_Sign')) and str(doc.get('Manager_Sign')).strip() != "nan" else ""
+        apply_date_str = datetime.now().strftime('%Y년 %m월 %d일')
         
-    d_idx = 5
-    detail_count = 1
-    for trip in raw_data:
-        try:
-            details = json.loads(trip.get('details_json', '[]'))
-            for item in details:
-                ws2.cell(row=d_idx, column=1, value=detail_count).alignment = align_center
-                ws2.cell(row=d_idx, column=2, value=str(trip.get('date', ''))[5:]).alignment = align_center
-                ws2.cell(row=d_idx, column=3, value=trip.get('team', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=4, value=trip.get('user', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=5, value=item.get('category', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=6, value=trip.get('content', '')).alignment = align_left
-                ws2.cell(row=d_idx, column=7, value=trip.get('place', '')).alignment = align_center
-                
-                amt_cell = ws2.cell(row=d_idx, column=8, value=int(item.get('amount', 0)))
-                amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
-                ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
-                
-                for c in range(1, 10):
-                    cell = ws2.cell(row=d_idx, column=c)
-                    cell.border = thin_border; cell.font = font_main
-                d_idx += 1; detail_count += 1
-        except: pass
+        html_template = f"""
+        <div style="border: 1px solid #000; padding: 40px; background-color: white; color: black; font-family: 'Malgun Gothic'; width: 700px; margin: 0 auto;">
+            <div style="display: flex; justify-content: flex-end;">
+                <table style="border-collapse: collapse; border: 1px solid black; text-align: center; color: black;">
+                    <tr>
+                        <th rowspan="2" style="border: 1px solid black; padding: 5px; width: 30px; background: #f2f2f2; font-size: 13px;">결<br>재</th>
+                        <th style="border: 1px solid black; padding: 5px; width: 80px; background: #f2f2f2; font-size: 13px;">담당</th>
+                        <th style="border: 1px solid black; padding: 5px; width: 80px; background: #f2f2f2; font-size: 13px;">팀장승인</th>
+                        <th style="border: 1px solid black; padding: 5px; width: 80px; background: #f2f2f2; font-size: 13px;">대표승인</th>
+                    </tr>
+                    <tr>
+                        <td style="border: 1px solid black; height: 55px; font-weight: bold; vertical-align: middle; font-size: 14px;">{user_info['이름']}</td>
+                        <td style="border: 1px solid black; height: 55px; font-weight: bold; vertical-align: middle; color: blue; font-size: 14px;">{print_sign}</td>
+                        <td style="border: 1px solid black; height: 55px; vertical-align: middle;"></td>
+                    </tr>
+                </table>
+            </div>
+            <h1 style="text-align: center; margin-top: 15px; color: black; font-size: 28px; letter-spacing: 5px;">연 차 휴 가 신 청 서</h1>
+            <br><br>
+            <table style="width: 100%; border-collapse: collapse; border: 1px solid black; color: black; font-size: 14px;">
+                <tr>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; width: 20%; font-weight: bold;">성 명</th>
+                    <td style="border: 1px solid black; padding: 12px; width: 30%;">{user_info['이름']}</td>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; width: 20%; font-weight: bold;">사 번</th>
+                    <td style="border: 1px solid black; padding: 12px; width: 30%;">{user_info['ID']}</td>
+                </tr>
+                <tr>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; font-weight: bold;">부 서</th>
+                    <td style="border: 1px solid black; padding: 12px;">{user_info['팀']}</td>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; font-weight: bold;">직 위</th>
+                    <td style="border: 1px solid black; padding: 12px;">{user_info['permission']}</td>
+                </tr>
+                <tr>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; font-weight: bold;">휴가 일자</th>
+                    <td colspan="3" style="border: 1px solid black; padding: 12px;">{doc['Date']}</td>
+                </tr>
+                <tr>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; font-weight: bold;">휴가 구분</th>
+                    <td colspan="3" style="border: 1px solid black; padding: 12px;">{doc['Type']}</td>
+                </tr>
+                <tr>
+                    <th style="border: 1px solid black; padding: 12px; background: #f2f2f2; height: 100px; font-weight: bold;">신청 사유</th>
+                    <td colspan="3" style="border: 1px solid black; padding: 12px; vertical-align: top;">{print_reason}</td>
+                </tr>
+            </table>
+            <br><br>
+            <p style="text-align: center; margin-top: 40px; font-size: 16px; color: black;">위와 같이 연차 휴가를 신청하오니 승인하여 주시기 바랍니다.</p>
+            <p style="text-align: center; margin-top: 30px; font-size: 14px; color: black;">{apply_date_str}</p>
+            <br>
+            <p style="text-align: right; margin-top: 20px; padding-right: 40px; font-size: 15px; color: black;">신청인 : <b style="font-size: 16px;">{user_info['이름']}</b> (인)</p>
+            <br><br>
+            <h2 style="text-align: center; margin-top: 20px; color: black; font-size: 22px; letter-spacing: 2px;">하이에어공조(주) 귀하</h2>
+        </div>
+        """
 
-    widths2 = [5, 11, 12, 10, 12, 35, 15, 14, 12]
-    for i, w in enumerate(widths2, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        pdf_script = f"""
+        <script>
+            function printPDF() {{
+                var printWindow = window.open('', '_blank', 'width=800,height=900');
+                printWindow.document.write('<html><head><title>연차휴가신청서_{user_info['이름']}</title>');
+                printWindow.document.write('<style>body {{ margin: 0; padding: 20px; background: #fff; }}</style></head><body>');
+                printWindow.document.write({repr(html_template)});
+                printWindow.document.write('</body></html>');
+                printWindow.document.close();
+                printWindow.focus();
+                setTimeout(function() {{
+                    printWindow.print();
+                    printWindow.close();
+                }}, 250);
+            }}
+        </script>
+        <button onclick="printPDF()" style="background-color: #FF4B4B; color: white; border: none; padding: 10px 20px; font-size: 15px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-bottom: 20px; width: 100%;">
+            📥 연차신청서 PDF 다운로드 / 즉시 인쇄하기
+        </button>
+        """
+        st.components.v1.html(pdf_script, height=60)
+        st.markdown(html_template, unsafe_allow_html=True)
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
+# --- ✅ 팀원 승인/반려 관리 ---
+elif choice == "✅ 팀원 승인/반려 관리":
+    st.header("📥 팀원 결재 관리")
+    pending = df_plans[df_plans["Status"] == "대기"].merge(df_emp[['ID', '이름', '팀']], left_on='Emp_ID', right_on='ID')
+    display_df = pending[pending['팀'] == user_info['팀']] if user_info['permission'] == "팀장" else pending
     
-    filename = f"정산서_{target_team}_{target_month}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if display_df.empty:
+        st.info("현재 결재 대기 중인 내역이 없습니다.")
+    else:
+        all_selected = st.checkbox("전체 선택/해제")
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login_page'))
+        display_df = display_df.copy()
+        display_df['선택'] = all_selected
+        
+        display_df_view = display_df.rename(columns={'Reason': '신청 사유'})
+        edited = st.data_editor(display_df_view[['선택','ID_x','이름','팀','Date','Type','신청 사유']], hide_index=True, use_container_width=True)
+        s_ids = edited[edited['선택'] == True]['ID_x'].tolist()
+        
+        if s_ids:
+            col_b1, col_b2 = st.columns(2)
+            if col_b1.button(f"✅ {len(s_ids)}건 일괄 승인", use_container_width=True):
+                for t_id in s_ids:
+                    idx = df_plans[df_plans["ID"] == t_id].index[0]
+                    e_id, v_type = df_plans.at[idx, "Emp_ID"], str(df_plans.at[idx, "Type"])
+                    df_plans.at[idx, "Status"] = "승인"
+                    df_plans.at[idx, "Manager_Sign"] = str(user_info['이름'])
+                    val = 0.5 if "반차" in v_type else 1.0
+                    if "연차계획" in v_type:
+                        df_emp.loc[df_emp["ID"] == e_id, "연차계획"] += val
+                    else:
+                        df_emp.loc[df_emp["ID"] == e_id, ["사용","연차잔액"]] += [val, -val]
+                save_data(df_emp, df_plans); st.success("승인 처리 완료!"); st.rerun()
+            
+            if col_b2.button(f"❌ {len(s_ids)}건 일괄 반려", use_container_width=True):
+                for t_id in s_ids:
+                    idx = df_plans[df_plans["ID"] == t_id].index[0]
+                    df_plans.at[idx, "Status"] = "반려"
+                    df_plans.at[idx, "Manager_Sign"] = "반려됨"
+                save_data(df_emp, df_plans); st.warning("반려 처리 완료!"); st.rerun()
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+# --- 📅 연차 현황 달력 ---
+elif choice == "📅 연차 현황 달력":
+    st.header("🗓️ 연차 현황 달력")
+    all_p = df_plans.merge(df_emp[['ID', '이름', '팀']], left_on='Emp_ID', right_on='ID')
+    cal_p = all_p[all_p['Status'] == '승인']
+    if user_info['permission'] == "팀장": cal_p = cal_p[cal_p['팀'] == user_info['팀']]
+    
+    t = datetime.now()
+    y_col, m_col = st.columns(2)
+    s_y = y_col.selectbox("연도", [t.year, t.year+1])
+    s_m = m_col.selectbox("월", range(1, 13), index=t.month-1)
+    
+    cal_list = calendar.monthcalendar(s_y, s_m)
+    st.write(f"### {s_y}년 {s_m}월")
+    c_heads = st.columns(7)
+    for i, d_name in enumerate(["월","화","수","목","금","토","일"]): c_heads[i].write(f"**{d_name}**")
+    
+    for week in cal_list:
+        c_days = st.columns(7)
+        for i, day in enumerate(week):
+            if day != 0:
+                target_dt = f"{s_y}-{s_m:02d}-{day:02d}"
+                evs = cal_p[cal_p['Date'] == target_dt]
+                txt = f"**{day}**"
+                for _, ev in evs.iterrows():
+                    color = "#E3F2FD" if "반차" not in ev['Type'] else "#FFFDE7"
+                    txt += f"\n<div style='font-size:0.7em; background:{color}; padding:2px; border-radius:3px; margin-top:2px; color:black;'>{ev['이름']}</div>"
+                c_days[i].markdown(txt, unsafe_allow_html=True)
+        st.divider()
+
+# --- 📊 부서/전사 모니터링 ---
+elif choice == "📊 부서/전사 모니터링":
+    if user_info['permission'] == "총괄":
+        st.header("🌐 전사 임직원 연차 현황")
+        st.dataframe(df_emp[['팀', 'ID', '이름', '연차기초', '사용', '연차계획', '연차잔액']], use_container_width=True, hide_index=True, height=600)
+    else:
+        st.header(f"🚩 {user_info['팀']} 부서 연차 현황")
+        dept_df = df_emp[df_emp['팀'] == user_info['팀']]
+        st.dataframe(dept_df[['ID', '이름', '연차기초', '사용', '연차계획', '연차잔액']], use_container_width=True, hide_index=True)
+
+# --- 🌐 [총괄] 전사 통합 관리 ---
+elif choice == "🌐 [총괄] 전사 통합 관리":
+    # 혹시 모를 로컬 백업용 (엑셀 파일 메모리 생성 유지)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_emp.to_excel(writer, sheet_name="Employees", index=False)
+        df_plans.to_excel(writer, sheet_name="PLANS", index=False)
+        load_notices().to_excel(writer, sheet_name="NOTICES", index=False)
+    buffer.seek(0)
+    st.download_button("📥 현재 구글시트 최신 데이터를 엑셀 백업본으로 다운로드", data=buffer, file_name="vacation_data_backup.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.divider()
+
+    tab_list, tab_stat, tab_notice, tab_mail, tab_emp = st.tabs(["📋 전사 로그 관리", "📈 월간 사용 통계", "📝 연차촉진 공지사항 관리", "📧 내일 연차자 메일 발송", "👥 임직원 정보 관리"])
+    
+    with tab_list:
+        all_logs = df_plans.merge(df_emp[['ID', '이름', '팀']], left_on='Emp_ID', right_on='ID')
+        all_logs['선택'] = False
+        ed_logs = st.data_editor(all_logs[['선택','ID_x','이름','팀','Date','Type','Status']], hide_index=True)
+        del_ids = ed_logs[ed_logs['선택'] == True]['ID_x'].tolist()
+        if del_ids and st.button("🗑️ 선택 항목 삭제 및 수치 복구"):
+            for di in del_ids:
+                row = df_plans[df_plans['ID'] == di].iloc[0]
+                if row['Status'] == '승인':
+                    v = 0.5 if "반차" in row['Type'] else 1.0
+                    if "연차계획" in row['Type']: df_emp.loc[df_emp['ID']==row['Emp_ID'], '연차계획'] -= v
+                    else: df_emp.loc[df_emp['ID']==row['Emp_ID'], ['사용','연차잔액']] += [-v, v]
+            df_plans = df_plans[~df_plans['ID'].isin(del_ids)]
+            save_data(df_emp, df_plans); st.rerun()
+            
+    with tab_stat:
+        for_s_date = st.date_input("기준 월 선택")
+        t_month = for_s_date.strftime("%Y-%m")
+        m_plans = df_plans[(df_plans['Date'].str.startswith(t_month)) & (df_plans['Status'] == '승인')].copy()
+        m_plans['val'] = m_plans['Type'].apply(lambda x: 0.5 if "반차" in str(x) else 1.0)
+        
+        def get_vacation_days_str(group):
+            date_strings = []
+            for _, r in group.sort_values(by="Date").iterrows():
+                try:
+                    day_num = int(r['Date'].split('-')[2])
+                    if "오전반차" in str(r['Type']): date_strings.append(f"{day_num}일(오전)")
+                    elif "오후반차" in str(r['Type']): date_strings.append(f"{day_num}일(오후)")
+                    else: date_strings.append(f"{day_num}일")
+                except: date_strings.append(r['Date'])
+            return ", ".join(date_strings)
+        
+        if not m_plans.empty:
+            u_sum = m_plans.groupby('Emp_ID')['val'].sum().reset_index()
+            u_dates = m_plans.groupby('Emp_ID').apply(get_vacation_days_str).reset_index(name='사용일')
+            u_stat = u_sum.merge(u_dates, on='Emp_ID', how='left')
+        else:
+            u_stat = pd.DataFrame(columns=['Emp_ID', 'val', '사용일'])
+        total_stat = df_emp[['팀','ID','이름']].merge(u_stat, left_on='ID', right_on='Emp_ID', how='left')
+        total_stat['val'] = total_stat['val'].fillna(0); total_stat['사용일'] = total_stat['사용일'].fillna("-")
+        st.dataframe(total_stat[['팀', 'ID', '이름', 'val', '사용일']].rename(columns={'val': '사용한 일수', 'ID': '사번'}), use_container_width=True, hide_index=True, height=600)
+
+    with tab_notice:
+        st.subheader("📝 연차촉진 공지사항 관리")
+        df_notices = load_notices()
+        tab_add, tab_edit = st.tabs(["등록", "수정/삭제"])
+        with tab_add:
+            with st.form("공지사항 등록 폼", clear_on_submit=True):
+                n_title = st.text_input("공지사항 제목")
+                n_content = st.text_area("공지 내용", height=300)
+                if st.form_submit_button("📢 공지사항 등록하기") and n_title and n_content:
+                    new_n_id = int(df_notices["ID"].max() + 1) if not df_notices.empty else 1
+                    new_notice = pd.DataFrame([{"ID": new_n_id, "날짜": datetime.now().strftime("%Y-%m-%d"), "제목": n_title, "내용": n_content}])
+                    save_notices(pd.concat([df_notices, new_notice], ignore_index=True)); st.success("🎉 등록 완료!"); st.rerun()
+        with tab_edit:
+            if not df_notices.empty:
+                edit_target = st.selectbox("수정/삭제할 공지사항 선택", df_notices["제목"].tolist())
+                target_row = df_notices[df_notices["제목"] == edit_target].iloc[0]
+                with st.form("공지사항 수정 폼"):
+                    e_title = st.text_input("제목", value=target_row["제목"])
+                    e_content = st.text_area("내용", value=target_row["내용"], height=200)
+                    col_e1, col_e2 = st.columns(2)
+                    if col_e1.form_submit_button("💾 수정 저장"):
+                        df_notices.loc[df_notices["제목"] == edit_target, ["제목", "내용"]] = [e_title, e_content]
+                        save_notices(df_notices); st.success("수정 완료!"); st.rerun()
+                    if col_e2.form_submit_button("🗑️ 영구 삭제", type="primary"):
+                        save_notices(df_notices[df_notices["제목"] != edit_target]); st.warning("삭제 완료!"); st.rerun()
+
+    with tab_mail:
+        st.subheader("📧 아웃룩 메일 서버 연동 향후 7일간 연차자 확인")
+        date_range = [(datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
+        tm_vacations = df_plans[(df_plans['Date'].isin(date_range)) & (df_plans['Status'] == '승인')]
+        if tm_vacations.empty:
+            st.warning("향후 7일간 승인된 연차 대상자가 없습니다.")
+        else:
+            mail_targets = tm_vacations.merge(df_emp[['ID', '이름', 'EMAIL']], left_on='Emp_ID', right_on='ID').sort_values(by='Date')
+            st.dataframe(mail_targets[['Date', '이름', 'Type', 'EMAIL']], hide_index=True, use_container_width=True)
+            if st.button("🚀 위 대상자 전원에게 안내 메일 즉시 일괄 발송"):
+                success_count = 0
+                for _, row in mail_targets.iterrows():
+                    if "@" in str(row['EMAIL']):
+                        if send_vacation_email(str(row['EMAIL']).strip(), row['이름'], row['Date']): success_count += 1
+                st.success(f"🎉 총 {success_count}명의 대상 직원에게 안내 메일을 발송했습니다!")
+
+    with tab_emp:
+        st.subheader("👥 임직원 정보 관리")
+        
+        if 'emp_save_success' in st.session_state and st.session_state['emp_save_success']:
+            st.success("✅ 임직원 정보가 성공적으로 업데이트되었습니다.")
+            st.session_state['emp_save_success'] = False
+            
+        edited_emp = st.data_editor(df_emp, num_rows="dynamic", use_container_width=True, height=400)
+        
+        if st.button("💾 임직원 정보 변경 사항 저장"):
+            save_all_data(edited_emp, df_plans, load_notices())
+            st.session_state['emp_save_success'] = True
+            st.rerun()
