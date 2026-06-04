@@ -11,6 +11,21 @@ import gspread
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
 
+# ==========================================
+# ⚙️ 시스템 기본 설정 (부서/예산/계정 관리)
+# 앞으로 부서가 추가되거나 변경되면 [여기만] 수정하세요!
+# ==========================================
+
+# 1. 부서 및 예산 설정 (예산이 없으면 0)
+TEAM_BUDGETS = {
+    "시운전팀": 1000000,
+    "생산팀": 500000,
+    "영업팀": 500000,
+    "전장팀": 800000
+}
+TEAMS_LIST = list(TEAM_BUDGETS.keys())
+
+# 2. 로그인 계정 설정
 USER_CREDENTIALS = {
     "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
@@ -18,13 +33,13 @@ USER_CREDENTIALS = {
     "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
     "전장": {"password": "1234", "name": "전장", "team": "전장팀"}
 }
+
 CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
 
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
-# 여기에 아까 복사해둔 구글 시트 URL 전체를 붙여넣으세요!
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
+SHEET_URL = "여기에_구글_스프레드시트_URL을_붙여넣으세요"
 
 try:
     gc = gspread.service_account(filename='credentials.json')
@@ -110,10 +125,14 @@ def index():
     month_end_date = f"{current_month}-31"
     
     ALL_TRIPS = get_all_trips()
-    
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
+    
     raw_stats_list = []
-    dashboard_stats = {'총합': 0, '시운전팀': 0, '생산팀': 0, '영업팀': 0, '전장팀': 0}
+    
+    # 🌟 자동화 적용: TEAMS_LIST를 바탕으로 대시보드 변수 동적 생성
+    dashboard_stats = {'총합': 0}
+    for t_name in TEAMS_LIST:
+        dashboard_stats[t_name] = 0
     
     for t in ALL_TRIPS:
         try: details = json.loads(t.get('details_json', '[]'))
@@ -130,13 +149,14 @@ def index():
                 amt = int(item.get('amount', 0))
                 dashboard_stats['총합'] += amt
                 raw_team = str(t.get('team', '')).strip()
-                std_team = '시운전팀' if raw_team == '시운전' else (raw_team + '팀' if not raw_team.endswith('팀') and raw_team != '관리자' else raw_team)
+                std_team = raw_team + '팀' if not raw_team.endswith('팀') and raw_team != '관리자' else raw_team
                 if std_team in dashboard_stats:
                     dashboard_stats[std_team] += amt
 
     return render_template('index.html', username=username, team=team, current_month=current_month,
         month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
-        categories=CATEGORIES, dashboard_stats=dashboard_stats, raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False))
+        categories=CATEGORIES, dashboard_stats=dashboard_stats, raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False),
+        teams=TEAMS_LIST) # HTML로 자동화 리스트 전달
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
@@ -146,7 +166,7 @@ def add_expense():
     content = request.form.get('content')
     search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
     
-    user_team = session.get('team', '시운전팀')
+    user_team = session.get('team', TEAMS_LIST[0]) # 첫번째 팀을 기본값으로
     if user_team == "관리자" and request.form.get('target_team'):
         user_team = request.form.get('target_team')
         
@@ -351,8 +371,8 @@ def download_cover():
         
     ws1.row_dimensions[sum_row_idx].height = 30
 
-    budget_map = {"생산팀": 500000, "영업팀": 500000, "시운전팀": 1000000, "전장팀": 800000}
-    team_budget = budget_map.get(display_team_title, 0) if target_team != 'ALL' else 0
+    # 🌟 자동화 적용: TEAM_BUDGETS 로부터 동적으로 예산 불러오기
+    team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
     budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
     
     r_idx += 2
@@ -368,14 +388,11 @@ def download_cover():
     summary_cell.alignment = align_center
     ws1.row_dimensions[r_idx].height = 36
 
-    # 📌 요청하신 엑셀 열 너비 반영 구간 (A=1, B=2, C=3 ...)
-    widths1 = {1: 4, 2: 4, 3: 40, 4: 6} 
-    for i in range(5, 13): widths1[i] = 9 # E열(5)부터 L열(12)까지 너비 9
-    
+    widths1 = {1: 4, 2: 4, 3: 40, 4: 5} 
+    for i in range(5, 13): widths1[i] = 9 
     for col_idx, w in widths1.items():
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
 
-    # ------------------ 시트 2: 상세내역 ------------------
     ws2 = wb.create_sheet(title="상세내역")
     ws2.merge_cells('A1:C2')
     ws2['A1'] = "지출 항목별 상세 증빙내역"
