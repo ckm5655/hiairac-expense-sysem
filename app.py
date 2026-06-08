@@ -17,7 +17,6 @@ app.secret_key = 'your_secret_key_here'
 # ==========================================
 
 # 1. 부서 및 예산 설정 (예산이 없으면 0)
-# 📌 영업2팀, 영업3팀이 완벽하게 추가되었습니다.
 TEAM_BUDGETS = {
     "시운전팀": 1000000,
     "생산팀": 500000,
@@ -28,23 +27,23 @@ TEAM_BUDGETS = {
     "법카2536": 0,
     "법카6035": 0,
     "법카7547": 0,
-    "법카0624": 0,
+    "법카0624": 0
 }
 TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
 # 2. 로그인 계정 설정
-# 📌 영업2팀, 영업3팀의 로그인 계정이 추가되었습니다. (비밀번호: 1234)
 USER_CREDENTIALS = {
     "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
     "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
     "영업2": {"password": "1234", "name": "영업2", "team": "영업2팀"},
     "영업3": {"password": "1234", "name": "영업3", "team": "영업3팀"},
+    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
     "전장": {"password": "1234", "name": "전장", "team": "전장팀"},
     "법카2536": {"password": "1234", "name": "법카2536", "team": "법카2536"},
     "법카6035": {"password": "1234", "name": "법카6035", "team": "법카6035"},
     "법카7547": {"password": "1234", "name": "법카7547", "team": "법카7547"},
-    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"},
+    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"}
 }
 
 CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
@@ -52,7 +51,7 @@ CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
+SHEET_URL = "여기에_구글_스프레드시트_URL을_붙여넣으세요"
 
 try:
     gc = gspread.service_account(filename='credentials.json')
@@ -87,6 +86,14 @@ def save_all_trips(trips_list):
 def is_match_team(db_team, target_team):
     if not db_team or not target_team: return False
     return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
+
+# 📌 추가된 핵심 함수: 부서 이름을 TEAM_BUDGETS에 등록된 이름과 찰떡같이 맞춰주는 기능
+def get_std_team(raw_team):
+    if not raw_team: return ""
+    raw = str(raw_team).strip()
+    if raw in TEAMS_LIST: return raw
+    if raw + '팀' in TEAMS_LIST: return raw + '팀'
+    return raw
 
 # ==========================================
 # 라우팅 (페이지 기능)
@@ -160,8 +167,9 @@ def index():
             if str(t.get('date', '')).startswith(current_month):
                 amt = int(item.get('amount', 0))
                 dashboard_stats['총합'] += amt
-                raw_team = str(t.get('team', '')).strip()
-                std_team = raw_team + '팀' if not raw_team.endswith('팀') and raw_team != '관리자' else raw_team
+                
+                # 📌 이름 매칭 오류 해결: 법카도 정상 인식하도록 고정
+                std_team = get_std_team(t.get('team', ''))
                 if std_team in dashboard_stats:
                     dashboard_stats[std_team] += amt
 
