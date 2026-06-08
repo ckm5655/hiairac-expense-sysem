@@ -47,7 +47,7 @@ CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
-SHEET_URL = "여기에_구글_스프레드시트_URL을_붙여넣으세요"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
 
 try:
     gc = gspread.service_account(filename='credentials.json')
