@@ -17,29 +17,34 @@ app.secret_key = 'your_secret_key_here'
 # ==========================================
 
 # 1. 부서 및 예산 설정 (예산이 없으면 0)
+# 📌 영업2팀, 영업3팀이 완벽하게 추가되었습니다.
 TEAM_BUDGETS = {
     "시운전팀": 1000000,
     "생산팀": 500000,
     "영업팀": 500000,
+    "영업2팀": 500000,
+    "영업3팀": 500000,
     "전장팀": 800000,
     "법카2536": 0,
     "법카6035": 0,
     "법카7547": 0,
-    "법카0624": 0
+    "법카0624": 0,
 }
 TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
 # 2. 로그인 계정 설정
+# 📌 영업2팀, 영업3팀의 로그인 계정이 추가되었습니다. (비밀번호: 1234)
 USER_CREDENTIALS = {
     "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
     "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
-    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
+    "영업2": {"password": "1234", "name": "영업2", "team": "영업2팀"},
+    "영업3": {"password": "1234", "name": "영업3", "team": "영업3팀"},
     "전장": {"password": "1234", "name": "전장", "team": "전장팀"},
     "법카2536": {"password": "1234", "name": "법카2536", "team": "법카2536"},
     "법카6035": {"password": "1234", "name": "법카6035", "team": "법카6035"},
     "법카7547": {"password": "1234", "name": "법카7547", "team": "법카7547"},
-    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"}
+    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"},
 }
 
 CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
@@ -137,7 +142,6 @@ def index():
     
     raw_stats_list = []
     
-    # 🌟 자동화 적용: TEAMS_LIST를 바탕으로 대시보드 변수 동적 생성
     dashboard_stats = {'총합': 0}
     for t_name in TEAMS_LIST:
         dashboard_stats[t_name] = 0
@@ -164,7 +168,7 @@ def index():
     return render_template('index.html', username=username, team=team, current_month=current_month,
         month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
         categories=CATEGORIES, dashboard_stats=dashboard_stats, raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False),
-        teams=TEAMS_LIST) # HTML로 자동화 리스트 전달
+        teams=TEAMS_LIST)
 
 @app.route('/expense/add', methods=['POST'])
 def add_expense():
@@ -174,7 +178,7 @@ def add_expense():
     content = request.form.get('content')
     search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
     
-    user_team = session.get('team', TEAMS_LIST[0]) # 첫번째 팀을 기본값으로
+    user_team = session.get('team', TEAMS_LIST[0])
     if user_team == "관리자" and request.form.get('target_team'):
         user_team = request.form.get('target_team')
         
@@ -379,7 +383,6 @@ def download_cover():
         
     ws1.row_dimensions[sum_row_idx].height = 30
 
-    # 🌟 자동화 적용: TEAM_BUDGETS 로부터 동적으로 예산 불러오기
     team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
     budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
     
