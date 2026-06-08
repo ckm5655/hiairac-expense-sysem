@@ -13,11 +13,8 @@ app.secret_key = 'your_secret_key_here'
 
 # ==========================================
 # ⚙️ 시스템 기본 설정 (부서/예산/계정 관리)
-# 앞으로 부서가 추가되거나 변경되면 [여기만] 수정하세요!
 # ==========================================
 
-# 1. 부서 및 예산 설정 (예산이 없으면 0)
-# 📌 영업2팀, 영업3팀이 완벽하게 추가되었습니다.
 TEAM_BUDGETS = {
     "시운전팀": 1000000,
     "생산팀": 500000,
@@ -28,12 +25,10 @@ TEAM_BUDGETS = {
     "법카2536": 0,
     "법카6035": 0,
     "법카7547": 0,
-    "법카0624": 0,
+    "법카0624": 0
 }
 TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
-# 2. 로그인 계정 설정
-# 📌 영업2팀, 영업3팀의 로그인 계정이 추가되었습니다. (비밀번호: 1234)
 USER_CREDENTIALS = {
     "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
@@ -44,7 +39,7 @@ USER_CREDENTIALS = {
     "법카2536": {"password": "1234", "name": "법카2536", "team": "법카2536"},
     "법카6035": {"password": "1234", "name": "법카6035", "team": "법카6035"},
     "법카7547": {"password": "1234", "name": "법카7547", "team": "법카7547"},
-    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"},
+    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"}
 }
 
 CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
@@ -52,7 +47,7 @@ CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "
 # ==========================================
 # 🌟 구글 스프레드시트 DB 연동 설정 🌟
 # ==========================================
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
+SHEET_URL = "여기에_구글_스프레드시트_URL을_붙여넣으세요"
 
 try:
     gc = gspread.service_account(filename='credentials.json')
@@ -160,8 +155,14 @@ def index():
             if str(t.get('date', '')).startswith(current_month):
                 amt = int(item.get('amount', 0))
                 dashboard_stats['총합'] += amt
+                
+                # 📌 치명적 오류 수정: 무조건 '팀'을 붙이던 로직에서 이름 그대로 매칭되도록 변경
                 raw_team = str(t.get('team', '')).strip()
-                std_team = raw_team + '팀' if not raw_team.endswith('팀') and raw_team != '관리자' else raw_team
+                std_team = raw_team
+                if std_team not in TEAMS_LIST:
+                    if std_team + '팀' in TEAMS_LIST:
+                        std_team += '팀'
+                
                 if std_team in dashboard_stats:
                     dashboard_stats[std_team] += amt
 
