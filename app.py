@@ -31,6 +31,7 @@ TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
 USER_CREDENTIALS = {
     "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
+    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
     "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
     "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
     "영업2": {"password": "1234", "name": "영업2", "team": "영업2팀"},
