@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
+from openpyxl.utils import get_column_letter  # 🚨 500 에러를 해결하는 핵심 수입(Import) 추가!
 from io import BytesIO
 import gspread
 
@@ -81,17 +82,10 @@ def get_all_trips():
 def save_all_trips(trips_list):
     if not ws: return
     try:
-        # 1. 데이터 준비
         values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in trips_list]
-        
-        # 2. 여유분 추가 (선택 사항이지만 기존 로직 유지)
         empty_row = [""] * len(HEADERS)
         values.extend([empty_row] * 50)
-        
-        # 3. 🚨 수정된 부분: 키워드 인자 제거하고 직접 전달 🚨
-        # range_name을 첫 번째 인자로, 데이터를 두 번째 인자로 전달합니다.
         ws.update(range_name="A1", values=values)
-        
     except Exception as e:
         print("데이터 저장 실패:", e)
         
@@ -168,7 +162,6 @@ def index():
                 amt = int(item.get('amount', 0))
                 dashboard_stats['총합'] += amt
                 
-                # 📌 치명적 오류 수정: 무조건 '팀'을 붙이던 로직에서 이름 그대로 매칭되도록 변경
                 raw_team = str(t.get('team', '')).strip()
                 std_team = raw_team
                 if std_team not in TEAMS_LIST:
@@ -389,8 +382,9 @@ def download_cover():
         ws1.cell(row=sum_row_idx, column=c).border = thin_border
         ws1.cell(row=sum_row_idx, column=c).fill = fill_sum
     
+    # 🚨 모듈 명시적 사용 (에러 해결)
     for c in range(5, 12):
-        col_letter = openpyxl.utils.get_column_letter(c)
+        col_letter = get_column_letter(c)
         sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
         sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
         
@@ -414,8 +408,10 @@ def download_cover():
 
     widths1 = {1: 4, 2: 4, 3: 40, 4: 5} 
     for i in range(5, 13): widths1[i] = 9 
+    
+    # 🚨 모듈 명시적 사용 (에러 해결)
     for col_idx, w in widths1.items():
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = w
+        ws1.column_dimensions[get_column_letter(col_idx)].width = w
 
     ws2 = wb.create_sheet(title="상세내역")
     ws2.merge_cells('A1:C2')
@@ -453,8 +449,10 @@ def download_cover():
         except: pass
 
     widths2 = [5, 11, 12, 10, 12, 35, 15, 14, 12]
+    
+    # 🚨 모듈 명시적 사용 (에러 해결)
     for i, w in enumerate(widths2, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws2.column_dimensions[get_column_letter(i)].width = w
 
     output = BytesIO()
     wb.save(output)
