@@ -79,21 +79,23 @@ def get_all_trips():
         return []
 
 def save_all_trips(trips_list):
+ def save_all_trips(trips_list):
     if not ws: return
     try:
-        # 1. 정상적인 전체 데이터 리스트 만들기
+        # 1. 데이터 준비
         values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in trips_list]
         
-        # 2. 게시물 삭제 등으로 데이터 줄이 짧아졌을 때, 시트 맨 밑에 남은 예전 찌꺼기를 안 보이게 덮어버리기 위해 빈 줄 50개를 여유분으로 달아줍니다.
+        # 2. 여유분 추가 (선택 사항이지만 기존 로직 유지)
         empty_row = [""] * len(HEADERS)
         values.extend([empty_row] * 50)
         
-        # 3. 🚨 기존에 있던 위험한 ws.clear() 삭제 🚨
-        # 전체 지우기 없이, 거대한 배열을 A1칸부터 그대로 덮어씌웁니다. (통신 단 1번으로 끝!)
-        ws.update(values=values, range_name="A1")
+        # 3. 🚨 수정된 부분: 키워드 인자 제거하고 직접 전달 🚨
+        # range_name을 첫 번째 인자로, 데이터를 두 번째 인자로 전달합니다.
+        ws.update(range_name="A1", values=values)
         
     except Exception as e:
-        print("데이터 저장 실패! (네트워크 오류 등으로 실패해도 기존 시트 데이터는 날아가지 않고 생존합니다):", e)
+        print("데이터 저장 실패:", e)
+        
 # ==========================================
 # 라우팅 (페이지 기능)
 # ==========================================
