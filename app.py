@@ -79,7 +79,6 @@ def get_all_trips():
         return []
 
 def save_all_trips(trips_list):
- def save_all_trips(trips_list):
     if not ws: return
     try:
         # 1. 데이터 준비
