@@ -281,7 +281,7 @@
             return norm1 === norm2;
         }
 
-        function filterTeamStats(selectedTeam, btnElement) {
+       function filterTeamStats(selectedTeam, btnElement) {
             if (btnElement) {
                 document.querySelectorAll('.btn-toggle').forEach(btn => btn.classList.remove('active'));
                 btnElement.classList.add('active');
@@ -297,43 +297,41 @@
                 : monthFiltered.filter(x => x.team === selectedTeam || isSameTeam(x.team, selectedTeam));
 
             let totalSum = 0;
-            let categoryMap = {'교통비': 0, '주차비': 0, '식비': 0, '숙박비': 0, '소모품비': 0, '차량유지비': 0, '운반비': 0, '기타': 0};
             let placeMap = {};
             let userMap = {}; 
 
             filtered.forEach(item => {
                 let rawAmount = item.amount || 0;
                 totalSum += rawAmount;
-
-                const cat = item.std_category || item.category;
-                if (categoryMap[cat] !== undefined) {
-                    categoryMap[cat] += rawAmount;
-                } else {
-                    categoryMap['기타'] += rawAmount;
-                }
-
-                if (item.place) {
-                    placeMap[item.place] = (placeMap[item.place] || 0) + rawAmount;
-                }
-                
-                if (item.user) {
-                    userMap[item.user] = (userMap[item.user] || 0) + rawAmount;
-                }
+                if (item.place) placeMap[item.place] = (placeMap[item.place] || 0) + rawAmount;
+                if (item.user) userMap[item.user] = (userMap[item.user] || 0) + rawAmount;
             });
 
-            document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
+            document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + " 원";
+
+            // 🌟 [핵심] 상위 8개 + 기타 로직 적용 함수
+            function processTop8(mapData) {
+                let sorted = Object.entries(mapData).sort((a, b) => b[1] - a[1]);
+                if (sorted.length <= 8) return sorted;
+                
+                let top8 = sorted.slice(0, 8);
+                let othersSum = sorted.slice(8).reduce((sum, item) => sum + item[1], 0);
+                top8.push(['기타', othersSum]);
+                return top8;
+            }
+
+            const topPlaces = processTop8(placeMap);
+            const topUsers = processTop8(userMap);
 
             if (placeChartObj) {
-                placeChartObj.data.labels = Object.keys(placeMap).length ? Object.keys(placeMap) : ['데이터 없음'];
-                placeChartObj.data.datasets[0].data = Object.values(placeMap).length ? Object.values(placeMap) : [0];
-                placeChartObj.options.plugins.title.text = `📍 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 출장지별 지출 순위`;
+                placeChartObj.data.labels = topPlaces.map(x => x[0]);
+                placeChartObj.data.datasets[0].data = topPlaces.map(x => x[1]);
                 placeChartObj.update();
             }
 
             if (userChartObj) {
-                userChartObj.data.labels = Object.keys(userMap).length ? Object.keys(userMap) : ['데이터 없음'];
-                userChartObj.data.datasets[0].data = Object.values(userMap).length ? Object.values(userMap) : [0];
-                userChartObj.options.plugins.title.text = `👤 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 인원별 지출 순위`;
+                userChartObj.data.labels = topUsers.map(x => x[0]);
+                userChartObj.data.datasets[0].data = topUsers.map(x => x[1]);
                 userChartObj.update();
             }
 
