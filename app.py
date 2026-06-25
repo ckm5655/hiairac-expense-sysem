@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
-from openpyxl.utils import get_column_letter  # 🚨 500 에러를 해결하는 핵심 수입(Import) 추가!
+from openpyxl.utils import get_column_letter
 from io import BytesIO
 import gspread
 
@@ -88,6 +88,10 @@ def save_all_trips(trips_list):
         ws.update(range_name="A1", values=values)
     except Exception as e:
         print("데이터 저장 실패:", e)
+
+def is_match_team(db_team, target_team):
+    if not db_team or not target_team: return False
+    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
         
 # ==========================================
 # 라우팅 (페이지 기능)
@@ -276,190 +280,195 @@ def delete_expense(trip_id):
 
 @app.route('/download/cover')
 def download_cover():
-    target_team = request.args.get('team', 'ALL')
-    target_month = request.args.get('month', datetime.now().strftime('%Y-%m'))
-    ALL_TRIPS = get_all_trips()
-    
-    if target_team == 'ALL':
-        raw_data = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(target_month)]
-        display_team_title = "전사 통합"
-    else:
-        raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
-        display_team_title = target_team
-
-    raw_data.sort(key=lambda x: (int(x.get('order', 999)), str(x.get('date', ''))))
-    wb = openpyxl.Workbook()
-    
-    font_title = Font(name='맑은 고딕', size=18, bold=True, color='000080')
-    font_header = Font(name='맑은 고딕', size=11, bold=True)
-    font_main = Font(name='맑은 고딕', size=10)
-    font_sum = Font(name='맑은 고딕', size=11, bold=True)
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
-    fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
-    align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
-    align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
-    align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
-
-    ws1 = wb.active
-    ws1.title = f"{target_month[5:7]}월 정산서"
-    ws1.merge_cells('A1:E2')
-    ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
-    ws1['A1'].font = font_title; ws1['A1'].alignment = align_left
-
-    display_categories = ["교통비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
-    headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)"] + display_categories + ["사용자"]
-
-    approve_headers = ["작성", "검토", "검토", "승인"]
-    for i, h in enumerate(approve_headers):
-        col_idx = 9 + i 
-        cell = ws1.cell(row=1, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-        cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
-        ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
-        for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
+    try:
+        target_team = request.args.get('team', 'ALL')
+        target_month = request.args.get('month', datetime.now().strftime('%Y-%m'))
+        ALL_TRIPS = get_all_trips()
         
-    ws1.row_dimensions[1].height = 24
-    ws1.row_dimensions[2].height = 24
-    ws1.row_dimensions[3].height = 24
+        if target_team == 'ALL':
+            raw_data = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(target_month)]
+            display_team_title = "전사 통합"
+        else:
+            raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
+            display_team_title = target_team
 
-    ws1.merge_cells('A4:E4')
-    ws1['A4'] = f"작성일자: {datetime.now().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
-    ws1['A4'].font = font_main
-    ws1.row_dimensions[4].height = 24
+        raw_data.sort(key=lambda x: (int(x.get('order', 999)), str(x.get('date', ''))))
+        wb = openpyxl.Workbook()
+        
+        font_title = Font(name='맑은 고딕', size=18, bold=True, color='000080')
+        font_header = Font(name='맑은 고딕', size=11, bold=True)
+        font_main = Font(name='맑은 고딕', size=10)
+        font_sum = Font(name='맑은 고딕', size=11, bold=True)
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
+        fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
+        align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
+        align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
+        align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
 
-    for col_idx, h in enumerate(headers1, 1):
-        cell = ws1.cell(row=5, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-    ws1.row_dimensions[5].height = 32
+        ws1 = wb.active
+        ws1.title = f"{target_month[5:7]}월 정산서"
+        ws1.merge_cells('A1:E2')
+        ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
+        ws1['A1'].font = font_title; ws1['A1'].alignment = align_left
 
-    r_idx = 6
-    for idx, trip in enumerate(raw_data, 1):
-        ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
-        raw_date = str(trip.get('date', ''))
-        ws1.cell(row=r_idx, column=2, value=raw_date[-2:] if len(raw_date)>=10 else raw_date).alignment = align_center
-        
-        display_content = f"[{trip['team']}] {trip['content']}" if target_team == 'ALL' else trip.get('content', '')
-        ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
-        ws1.cell(row=r_idx, column=4, value=trip.get('place', '')).alignment = align_center
-        
-        t_cell = ws1.cell(row=r_idx, column=5, value=int(trip.get('total_amount', 0)))
-        t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
-        
-        cat_sums = {c: 0 for c in display_categories}
-        try:
-            details = json.loads(trip.get('details_json', '[]'))
-            for item in details:
-                c_name = item.get('category', '기타')
-                amt = int(item.get('amount', 0))
-                if c_name in ['교통비', '주차비']: cat_sums['교통비'] += amt
-                elif c_name in ['운반비', '기타']: cat_sums['기타'] += amt
-                elif c_name in cat_sums: cat_sums[c_name] += amt
-                else: cat_sums['기타'] += amt
-        except: pass
-        
-        for c_idx, cat_name in enumerate(display_categories, 6):
-            v_cell = ws1.cell(row=r_idx, column=c_idx)
-            v_cell.value = cat_sums[cat_name] if cat_sums[cat_name] > 0 else ""
-            v_cell.number_format = '#,##0'; v_cell.alignment = align_right
+        display_categories = ["교통비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
+        headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)"] + display_categories + ["사용자"]
+
+        approve_headers = ["작성", "검토", "검토", "승인"]
+        for i, h in enumerate(approve_headers):
+            col_idx = 9 + i 
+            cell = ws1.cell(row=1, column=col_idx, value=h)
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
+            cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
+            ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
+            for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
             
-        ws1.cell(row=r_idx, column=12, value=trip.get('user', '')).alignment = align_center
+        ws1.row_dimensions[1].height = 24
+        ws1.row_dimensions[2].height = 24
+        ws1.row_dimensions[3].height = 24
+
+        ws1.merge_cells('A4:E4')
+        ws1['A4'] = f"작성일자: {datetime.now().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
+        ws1['A4'].font = font_main
+        ws1.row_dimensions[4].height = 24
+
+        for col_idx, h in enumerate(headers1, 1):
+            cell = ws1.cell(row=5, column=col_idx, value=h)
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+        ws1.row_dimensions[5].height = 32
+
+        r_idx = 6
+        for idx, trip in enumerate(raw_data, 1):
+            ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
+            raw_date = str(trip.get('date', ''))
+            ws1.cell(row=r_idx, column=2, value=raw_date[-2:] if len(raw_date)>=10 else raw_date).alignment = align_center
+            
+            display_content = f"[{trip['team']}] {trip['content']}" if target_team == 'ALL' else trip.get('content', '')
+            ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
+            ws1.cell(row=r_idx, column=4, value=trip.get('place', '')).alignment = align_center
+            
+            t_cell = ws1.cell(row=r_idx, column=5, value=int(trip.get('total_amount', 0)))
+            t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
+            
+            cat_sums = {c: 0 for c in display_categories}
+            try:
+                details = json.loads(trip.get('details_json', '[]'))
+                for item in details:
+                    c_name = item.get('category', '기타')
+                    amt = int(item.get('amount', 0))
+                    if c_name in ['교통비', '주차비']: cat_sums['교통비'] += amt
+                    elif c_name in ['운반비', '기타']: cat_sums['기타'] += amt
+                    elif c_name in cat_sums: cat_sums[c_name] += amt
+                    else: cat_sums['기타'] += amt
+            except: pass
+            
+            for c_idx, cat_name in enumerate(display_categories, 6):
+                v_cell = ws1.cell(row=r_idx, column=c_idx)
+                v_cell.value = cat_sums[cat_name] if cat_sums[cat_name] > 0 else ""
+                v_cell.number_format = '#,##0'; v_cell.alignment = align_right
+                
+            ws1.cell(row=r_idx, column=12, value=trip.get('user', '')).alignment = align_center
+            
+            for c in range(1, len(headers1)+1):
+                cell = ws1.cell(row=r_idx, column=c)
+                if c != 5: cell.font = font_main
+                cell.border = thin_border
+                
+            ws1.row_dimensions[r_idx].height = 28
+            r_idx += 1
+
+        sum_row_idx = r_idx
+        ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
+        ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
+        ws1.cell(row=sum_row_idx, column=1).alignment = align_center
         
         for c in range(1, len(headers1)+1):
-            cell = ws1.cell(row=r_idx, column=c)
-            if c != 5: cell.font = font_main
-            cell.border = thin_border
+            ws1.cell(row=sum_row_idx, column=c).border = thin_border
+            ws1.cell(row=sum_row_idx, column=c).fill = fill_sum
+        
+        for c in range(5, 12):
+            col_letter = get_column_letter(c)
+            sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
+            sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
             
-        ws1.row_dimensions[r_idx].height = 28
-        r_idx += 1
+        ws1.row_dimensions[sum_row_idx].height = 30
 
-    sum_row_idx = r_idx
-    ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
-    ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
-    ws1.cell(row=sum_row_idx, column=1).alignment = align_center
-    
-    for c in range(1, len(headers1)+1):
-        ws1.cell(row=sum_row_idx, column=c).border = thin_border
-        ws1.cell(row=sum_row_idx, column=c).fill = fill_sum
-    
-    # 🚨 모듈 명시적 사용 (에러 해결)
-    for c in range(5, 12):
-        col_letter = get_column_letter(c)
-        sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
-        sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
+        # 🚨 치명적 에러 해결: 엑셀 수식 대신 파이썬이 계산한 안전한 '일반 텍스트'로 변경!
+        team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
+        total_expense = sum(int(t.get('total_amount', 0)) for t in raw_data)
         
-    ws1.row_dimensions[sum_row_idx].height = 30
-
-    team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
-    budget_str = f"{team_budget:,.0f}" if team_budget > 0 else "0"
-    
-    r_idx += 2
-    ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
-    summary_cell = ws1.cell(row=r_idx, column=1)
-    
-    if team_budget > 0:
-        summary_cell.value = f'="가지급금금액(이월잔액포함) [ {budget_str} ]   -   총경비사용금액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ]   =   잔액 [ " & TEXT({team_budget}-E{sum_row_idx}, "#,##0") & " ]"'
-    else:
-        summary_cell.value = f'="전체 통합 경비 합계액 [ " & TEXT(E{sum_row_idx}, "#,##0") & " ] 원"'
+        r_idx += 2
+        ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
+        summary_cell = ws1.cell(row=r_idx, column=1)
         
-    summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
-    summary_cell.alignment = align_center
-    ws1.row_dimensions[r_idx].height = 36
+        if team_budget > 0:
+            balance = team_budget - total_expense
+            summary_cell.value = f"가지급금액(이월잔액포함) [ {team_budget:,.0f} ]   -   총경비사용금액 [ {total_expense:,.0f} ]   =   잔액 [ {balance:,.0f} ]"
+        else:
+            summary_cell.value = f"전체 통합 경비 합계액 [ {total_expense:,.0f} ] 원"
+            
+        summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
+        summary_cell.alignment = align_center
+        ws1.row_dimensions[r_idx].height = 36
 
-    widths1 = {1: 4, 2: 4, 3: 40, 4: 5} 
-    for i in range(5, 13): widths1[i] = 9 
-    
-    # 🚨 모듈 명시적 사용 (에러 해결)
-    for col_idx, w in widths1.items():
-        ws1.column_dimensions[get_column_letter(col_idx)].width = w
-
-    ws2 = wb.create_sheet(title="상세내역")
-    ws2.merge_cells('A1:C2')
-    ws2['A1'] = "지출 항목별 상세 증빙내역"
-    ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
-    ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
-    
-    headers2 = ["순번", "사용일자", "부서명", "사용자", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
-    for col_idx, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=4, column=col_idx, value=h)
-        cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+        widths1 = {1: 4, 2: 4, 3: 40, 4: 5} 
+        for i in range(5, 13): widths1[i] = 9 
         
-    d_idx = 5
-    detail_count = 1
-    for trip in raw_data:
-        try:
-            details = json.loads(trip.get('details_json', '[]'))
-            for item in details:
-                ws2.cell(row=d_idx, column=1, value=detail_count).alignment = align_center
-                ws2.cell(row=d_idx, column=2, value=str(trip.get('date', ''))[5:]).alignment = align_center
-                ws2.cell(row=d_idx, column=3, value=trip.get('team', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=4, value=trip.get('user', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=5, value=item.get('category', '')).alignment = align_center
-                ws2.cell(row=d_idx, column=6, value=trip.get('content', '')).alignment = align_left
-                ws2.cell(row=d_idx, column=7, value=trip.get('place', '')).alignment = align_center
-                
-                amt_cell = ws2.cell(row=d_idx, column=8, value=int(item.get('amount', 0)))
-                amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
-                ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
-                
-                for c in range(1, 10):
-                    cell = ws2.cell(row=d_idx, column=c)
-                    cell.border = thin_border; cell.font = font_main
-                d_idx += 1; detail_count += 1
-        except: pass
+        for col_idx, w in widths1.items():
+            ws1.column_dimensions[get_column_letter(col_idx)].width = w
 
-    widths2 = [5, 11, 12, 10, 12, 35, 15, 14, 12]
-    
-    # 🚨 모듈 명시적 사용 (에러 해결)
-    for i, w in enumerate(widths2, 1):
-        ws2.column_dimensions[get_column_letter(i)].width = w
+        ws2 = wb.create_sheet(title="상세내역")
+        ws2.merge_cells('A1:C2')
+        ws2['A1'] = "지출 항목별 상세 증빙내역"
+        ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
+        ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
+        
+        headers2 = ["순번", "사용일자", "부서명", "사용자", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
+        for col_idx, h in enumerate(headers2, 1):
+            cell = ws2.cell(row=4, column=col_idx, value=h)
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+            
+        d_idx = 5
+        detail_count = 1
+        for trip in raw_data:
+            try:
+                details = json.loads(trip.get('details_json', '[]'))
+                for item in details:
+                    ws2.cell(row=d_idx, column=1, value=detail_count).alignment = align_center
+                    ws2.cell(row=d_idx, column=2, value=str(trip.get('date', ''))[5:]).alignment = align_center
+                    ws2.cell(row=d_idx, column=3, value=trip.get('team', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=4, value=trip.get('user', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=5, value=item.get('category', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=6, value=trip.get('content', '')).alignment = align_left
+                    ws2.cell(row=d_idx, column=7, value=trip.get('place', '')).alignment = align_center
+                    
+                    amt_cell = ws2.cell(row=d_idx, column=8, value=int(item.get('amount', 0)))
+                    amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
+                    ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
+                    
+                    for c in range(1, 10):
+                        cell = ws2.cell(row=d_idx, column=c)
+                        cell.border = thin_border; cell.font = font_main
+                    d_idx += 1; detail_count += 1
+            except: pass
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    filename = f"정산서_{target_team}_{target_month}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        widths2 = [5, 11, 12, 10, 12, 35, 15, 14, 12]
+        
+        for i, w in enumerate(widths2, 1):
+            ws2.column_dimensions[get_column_letter(i)].width = w
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"정산서_{target_team}_{target_month}.xlsx"
+        return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
+    except Exception as e:
+        # 🚨 에러가 발생해도 500 화면이 아니라 경고창을 띄워주는 방어 로직!
+        print("엑셀 다운로드 중 에러 발생:", e)
+        return f"<script>alert('엑셀 파일 생성 중 오류가 발생했습니다: {str(e)}'); history.back();</script>"
 
 @app.route('/logout')
 def logout():
