@@ -79,16 +79,6 @@ def get_all_trips():
         print("데이터 로드 에러:", e)
         return []
 
-def save_all_trips(trips_list):
-    if not ws: return
-    try:
-        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in trips_list]
-        empty_row = [""] * len(HEADERS)
-        values.extend([empty_row] * 50)
-        ws.update(range_name="A1", values=values)
-    except Exception as e:
-        print("데이터 저장 실패:", e)
-
 def is_match_team(db_team, target_team):
     if not db_team or not target_team: return False
     return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
@@ -207,17 +197,21 @@ def add_expense():
             
     items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
     
-    ALL_TRIPS = get_all_trips()
-    
     new_trip = {
-        "trip_id": str(uuid.uuid4().hex[:8]), "order": len(ALL_TRIPS) + 1,
+        "trip_id": str(uuid.uuid4().hex[:8]), "order": 999,
         "team": user_team, "date": expense_date, "user": user_name,
         "place": place, "content": content, "items_desc": items_desc,
         "total_amount": total_amount, "details_json": json.dumps(details, ensure_ascii=False)
     }
     
-    ALL_TRIPS.append(new_trip)
-    save_all_trips(ALL_TRIPS) 
+    try:
+        # 🚨 동시접속 충돌 완벽 해결! 🚨 
+        # 전체를 다시 읽고 덮어쓰지 않고, 맨 밑에 새 데이터 한 줄만 안전하게 끼워 넣습니다.
+        new_row = [str(new_trip.get(h, "")) for h in HEADERS]
+        ws.append_row(new_row)
+    except Exception as e:
+        print("데이터 저장 실패:", e)
+        return f"<script>alert('서버 저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -229,53 +223,80 @@ def edit_submit():
     sub_categories = request.form.getlist('sub_receipt_categories')
     sub_amounts = request.form.getlist('sub_receipt_amounts')
     
-    ALL_TRIPS = get_all_trips()
-    for t in ALL_TRIPS:
-        if str(t.get('trip_id')) == str(trip_id):
-            t['date'] = request.form.get('date')
-            t['user'] = request.form.get('user')
-            t['place'] = request.form.get('place')
-            t['content'] = request.form.get('content')
-            
-            new_details, total_amount, desc_parts = [], 0, []
-            for i in range(len(sub_ids)):
-                try: amt = int(sub_amounts[i])
-                except: amt = 0
-                cat = sub_categories[i]
-                new_details.append({"id": sub_ids[i], "category": cat, "amount": amt})
-                total_amount += amt
-                desc_parts.append(f"{cat}: {amt:,}원")
+    try:
+        # 🚨 수정한 딱 그 줄만 찾아서 원포인트 업데이트 진행
+        records = ws.get_all_records()
+        for i, r in enumerate(records):
+            if str(r.get('trip_id')) == str(trip_id):
+                t = r
+                t['date'] = request.form.get('date')
+                t['user'] = request.form.get('user')
+                t['place'] = request.form.get('place')
+                t['content'] = request.form.get('content')
                 
-            t['total_amount'] = total_amount
-            t['items_desc'] = " | ".join(desc_parts)
-            t['details_json'] = json.dumps(new_details, ensure_ascii=False)
-            break
-            
-    save_all_trips(ALL_TRIPS)
+                new_details, total_amount, desc_parts = [], 0, []
+                for j in range(len(sub_ids)):
+                    try: amt = int(sub_amounts[j])
+                    except: amt = 0
+                    cat = sub_categories[j]
+                    new_details.append({"id": sub_ids[j], "category": cat, "amount": amt})
+                    total_amount += amt
+                    desc_parts.append(f"{cat}: {amt:,}원")
+                    
+                t['total_amount'] = total_amount
+                t['items_desc'] = " | ".join(desc_parts)
+                t['details_json'] = json.dumps(new_details, ensure_ascii=False)
+                
+                new_row = [str(t.get(h, "")) for h in HEADERS]
+                # A2, A3 등 해당 줄 번호만 타겟팅 (1번 줄은 제목이므로 i+2)
+                ws.update(range_name=f"A{i+2}", values=[new_row])
+                break
+    except Exception as e:
+        print("데이터 수정 실패:", e)
+        return f"<script>alert('서버 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/expense/reorder', methods=['POST'])
 def reorder():
     trip_ids = request.form.getlist('trip_ids')
     search_month = request.form.get('search_month')
-    ALL_TRIPS = get_all_trips()
     
-    for index, tid in enumerate(trip_ids):
-        for t in ALL_TRIPS:
-            if str(t.get('trip_id')) == str(tid):
-                t['order'] = index + 1
-                break
-                
-    save_all_trips(ALL_TRIPS)
+    try:
+        # 정렬은 부득이하게 전체 업데이트가 필요하나, 빈 행을 추가하지 않아 좀비 데이터를 방지합니다.
+        records = ws.get_all_records()
+        for r in records:
+            r['order'] = int(r.get('order') if r.get('order') else 999)
+            
+        for index, tid in enumerate(trip_ids):
+            for r in records:
+                if str(r.get('trip_id')) == str(tid):
+                    r['order'] = index + 1
+                    break
+                    
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in records]
+        ws.update(range_name="A1", values=values)
+    except Exception as e:
+        print("순번 정렬 실패:", e)
+        return f"<script>alert('순번 정렬 중 오류가 발생했습니다.'); history.back();</script>"
+        
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/expense/delete/<trip_id>')
 def delete_expense(trip_id):
     search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
-    ALL_TRIPS = get_all_trips()
-    ALL_TRIPS = [t for t in ALL_TRIPS if str(t.get('trip_id')) != str(trip_id)]
     
-    save_all_trips(ALL_TRIPS)
+    try:
+        # 🚨 지우고 싶은 데이터가 있는 정확한 줄 번호를 찾아서 시트에서 아예 해당 행을 삭제
+        records = ws.get_all_records()
+        for i, r in enumerate(records):
+            if str(r.get('trip_id')) == str(trip_id):
+                ws.delete_rows(i + 2) # 첫 줄은 제목이므로 2를 더함
+                break
+    except Exception as e:
+        print("데이터 삭제 실패:", e)
+        return f"<script>alert('서버 삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/download/cover')
@@ -394,7 +415,6 @@ def download_cover():
             
         ws1.row_dimensions[sum_row_idx].height = 30
 
-        # 🚨 치명적 에러 해결: 엑셀 수식 대신 파이썬이 계산한 안전한 '일반 텍스트'로 변경!
         team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
         total_expense = sum(int(t.get('total_amount', 0)) for t in raw_data)
         
@@ -466,7 +486,6 @@ def download_cover():
         return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         
     except Exception as e:
-        # 🚨 에러가 발생해도 500 화면이 아니라 경고창을 띄워주는 방어 로직!
         print("엑셀 다운로드 중 에러 발생:", e)
         return f"<script>alert('엑셀 파일 생성 중 오류가 발생했습니다: {str(e)}'); history.back();</script>"
 
