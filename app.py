@@ -74,7 +74,7 @@ def get_all_trips():
             r['order'] = int(r.get('order') if r.get('order') else 999)
             r['total_amount'] = int(r.get('total_amount') if r.get('total_amount') else 0)
             r['trip_id'] = str(r.get('trip_id', ''))
-        return records
+        return sorted(records, key=lambda x: x['order'])
     except Exception as e:
         print("데이터 로드 에러:", e)
         return []
@@ -135,16 +135,13 @@ def index():
     ALL_TRIPS = get_all_trips()
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
     
-    # 🌟 [추가됨] 부서별 지능형 자동 정렬 (시운전: 이름->날짜, 나머지: 날짜)
     def custom_sort(t):
         t_team = str(t.get('team', '')).strip()
         t_date = str(t.get('date', ''))
         t_user = str(t.get('user', ''))
         t_order = int(t.get('order', 999))
-        if t_team == '시운전팀':
-            return (0, t_user, t_date, t_order)
-        else:
-            return (1, t_date, t_order, t_user)
+        if t_team == '시운전팀': return (0, t_user, t_date, t_order)
+        else: return (1, t_date, t_order, t_user)
             
     filtered_trips.sort(key=custom_sort)
     
@@ -170,11 +167,8 @@ def index():
             raw_team = str(t.get('team', '')).strip()
             std_team = raw_team
             if std_team not in TEAMS_LIST:
-                if std_team + '팀' in TEAMS_LIST:
-                    std_team += '팀'
-            
-            if std_team in dashboard_stats:
-                dashboard_stats[std_team] += amt
+                if std_team + '팀' in TEAMS_LIST: std_team += '팀'
+            if std_team in dashboard_stats: dashboard_stats[std_team] += amt
 
     return render_template('index.html', username=username, team=team, current_month=current_month,
         month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
@@ -247,12 +241,14 @@ def edit_submit():
                     try: amt = int(sub_amounts[j])
                     except: amt = 0
                     cat = sub_categories[j]
-                    new_details.append({"id": sub_ids[j], "category": cat, "amount": amt})
-                    total_amount += amt
-                    desc_parts.append(f"{cat}: {amt:,}원")
-                    
+                    # 🌟 0원 항목이나 카테고리가 없는 빈 데이터는 무시하도록 방어 로직 추가
+                    if cat and amt > 0:
+                        new_details.append({"id": sub_ids[j], "category": cat, "amount": amt})
+                        total_amount += amt
+                        desc_parts.append(f"{cat}: {amt:,}원")
+                        
                 t['total_amount'] = total_amount
-                t['items_desc'] = " | ".join(desc_parts)
+                t['items_desc'] = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
                 t['details_json'] = json.dumps(new_details, ensure_ascii=False)
                 
                 new_row = [str(t.get(h, "")) for h in HEADERS]
@@ -309,7 +305,6 @@ def download_cover():
             raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
             display_team_title = target_team
 
-        # 🌟 [추가됨] 엑셀 다운로드 시에도 동일한 자동 정렬 적용
         def custom_sort(t):
             t_team = str(t.get('team', '')).strip()
             t_date = str(t.get('date', ''))
