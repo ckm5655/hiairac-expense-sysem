@@ -74,7 +74,7 @@ def get_all_trips():
             r['order'] = int(r.get('order') if r.get('order') else 999)
             r['total_amount'] = int(r.get('total_amount') if r.get('total_amount') else 0)
             r['trip_id'] = str(r.get('trip_id', ''))
-        return sorted(records, key=lambda x: x['order'])
+        return records
     except Exception as e:
         print("데이터 로드 에러:", e)
         return []
@@ -135,13 +135,25 @@ def index():
     ALL_TRIPS = get_all_trips()
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
     
-    raw_stats_list = []
+    # 🌟 [추가됨] 부서별 지능형 자동 정렬 (시운전: 이름->날짜, 나머지: 날짜)
+    def custom_sort(t):
+        t_team = str(t.get('team', '')).strip()
+        t_date = str(t.get('date', ''))
+        t_user = str(t.get('user', ''))
+        t_order = int(t.get('order', 999))
+        if t_team == '시운전팀':
+            return (0, t_user, t_date, t_order)
+        else:
+            return (1, t_date, t_order, t_user)
+            
+    filtered_trips.sort(key=custom_sort)
     
+    raw_stats_list = []
     dashboard_stats = {'총합': 0}
     for t_name in TEAMS_LIST:
         dashboard_stats[t_name] = 0
     
-    for t in ALL_TRIPS:
+    for t in filtered_trips:
         try: details = json.loads(t.get('details_json', '[]'))
         except: details = []
         for item in details:
@@ -152,18 +164,17 @@ def index():
             }
             raw_stats_list.append(stat_item)
             
-            if str(t.get('date', '')).startswith(current_month):
-                amt = int(item.get('amount', 0))
-                dashboard_stats['총합'] += amt
-                
-                raw_team = str(t.get('team', '')).strip()
-                std_team = raw_team
-                if std_team not in TEAMS_LIST:
-                    if std_team + '팀' in TEAMS_LIST:
-                        std_team += '팀'
-                
-                if std_team in dashboard_stats:
-                    dashboard_stats[std_team] += amt
+            amt = int(item.get('amount', 0))
+            dashboard_stats['총합'] += amt
+            
+            raw_team = str(t.get('team', '')).strip()
+            std_team = raw_team
+            if std_team not in TEAMS_LIST:
+                if std_team + '팀' in TEAMS_LIST:
+                    std_team += '팀'
+            
+            if std_team in dashboard_stats:
+                dashboard_stats[std_team] += amt
 
     return render_template('index.html', username=username, team=team, current_month=current_month,
         month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
@@ -205,13 +216,11 @@ def add_expense():
     }
     
     try:
-        # 🚨 동시접속 충돌 완벽 해결! 🚨 
-        # 전체를 다시 읽고 덮어쓰지 않고, 맨 밑에 새 데이터 한 줄만 안전하게 끼워 넣습니다.
         new_row = [str(new_trip.get(h, "")) for h in HEADERS]
         ws.append_row(new_row)
     except Exception as e:
         print("데이터 저장 실패:", e)
-        return f"<script>alert('서버 저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        return f"<script>alert('서버 저장 중 오류가 발생했습니다.'); history.back();</script>"
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -224,7 +233,6 @@ def edit_submit():
     sub_amounts = request.form.getlist('sub_receipt_amounts')
     
     try:
-        # 🚨 수정한 딱 그 줄만 찾아서 원포인트 업데이트 진행
         records = ws.get_all_records()
         for i, r in enumerate(records):
             if str(r.get('trip_id')) == str(trip_id):
@@ -248,12 +256,11 @@ def edit_submit():
                 t['details_json'] = json.dumps(new_details, ensure_ascii=False)
                 
                 new_row = [str(t.get(h, "")) for h in HEADERS]
-                # A2, A3 등 해당 줄 번호만 타겟팅 (1번 줄은 제목이므로 i+2)
                 ws.update(range_name=f"A{i+2}", values=[new_row])
                 break
     except Exception as e:
         print("데이터 수정 실패:", e)
-        return f"<script>alert('서버 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        return f"<script>alert('서버 수정 중 오류가 발생했습니다.'); history.back();</script>"
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -261,42 +268,31 @@ def edit_submit():
 def reorder():
     trip_ids = request.form.getlist('trip_ids')
     search_month = request.form.get('search_month')
-    
     try:
-        # 정렬은 부득이하게 전체 업데이트가 필요하나, 빈 행을 추가하지 않아 좀비 데이터를 방지합니다.
         records = ws.get_all_records()
-        for r in records:
-            r['order'] = int(r.get('order') if r.get('order') else 999)
-            
+        for r in records: r['order'] = int(r.get('order') if r.get('order') else 999)
         for index, tid in enumerate(trip_ids):
             for r in records:
                 if str(r.get('trip_id')) == str(tid):
                     r['order'] = index + 1
                     break
-                    
         values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in records]
         ws.update(range_name="A1", values=values)
     except Exception as e:
         print("순번 정렬 실패:", e)
-        return f"<script>alert('순번 정렬 중 오류가 발생했습니다.'); history.back();</script>"
-        
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/expense/delete/<trip_id>')
 def delete_expense(trip_id):
     search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
-    
     try:
-        # 🚨 지우고 싶은 데이터가 있는 정확한 줄 번호를 찾아서 시트에서 아예 해당 행을 삭제
         records = ws.get_all_records()
         for i, r in enumerate(records):
             if str(r.get('trip_id')) == str(trip_id):
-                ws.delete_rows(i + 2) # 첫 줄은 제목이므로 2를 더함
+                ws.delete_rows(i + 2) 
                 break
     except Exception as e:
         print("데이터 삭제 실패:", e)
-        return f"<script>alert('서버 삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
-        
     return redirect(url_for('index', search_month=search_month))
 
 @app.route('/download/cover')
@@ -313,7 +309,17 @@ def download_cover():
             raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
             display_team_title = target_team
 
-        raw_data.sort(key=lambda x: (int(x.get('order', 999)), str(x.get('date', ''))))
+        # 🌟 [추가됨] 엑셀 다운로드 시에도 동일한 자동 정렬 적용
+        def custom_sort(t):
+            t_team = str(t.get('team', '')).strip()
+            t_date = str(t.get('date', ''))
+            t_user = str(t.get('user', ''))
+            t_order = int(t.get('order', 999))
+            if t_team == '시운전팀': return (0, t_user, t_date, t_order)
+            else: return (1, t_date, t_order, t_user)
+            
+        raw_data.sort(key=custom_sort)
+        
         wb = openpyxl.Workbook()
         
         font_title = Font(name='맑은 고딕', size=18, bold=True, color='000080')
