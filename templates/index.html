@@ -6,7 +6,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
     
-    <!-- 🌟 [추가됨] 화면 새로고침 시 스크롤 위치를 그대로 기억하는 마법의 스크립트 -->
     <script>
         document.addEventListener("DOMContentLoaded", function() {
             const scrollPos = sessionStorage.getItem("appScrollPos");
@@ -72,7 +71,8 @@
         
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); overflow-y: auto; }
         .modal-content { background: white; margin: 5% auto; padding: 25px; border-radius: 8px; width: 550px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
-        .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
+        /* 🌟 수정 모달창 안의 영수증 삭제버튼을 위해 그리드 비율 조정 */
+        .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; align-items: end;}
     </style>
     <script>
         const globalCategories = [
@@ -110,6 +110,37 @@
             button.closest('.receipt-entry-row').remove();
         }
 
+        // 🌟 수정 모달창 전용: 영수증 행 추가 함수
+        function addModalReceiptLine() {
+            const container = document.getElementById('edit_receipts_container');
+            let catOptions = '';
+            globalCategories.forEach(cat => {
+                catOptions += `<option value="${cat}">${cat}</option>`;
+            });
+            const tempId = 'r_' + Math.random().toString(36).substr(2, 6);
+            
+            const div = document.createElement('div');
+            div.className = 'modal-receipt-row';
+            div.innerHTML = `
+                <input type="hidden" name="sub_receipt_ids" value="${tempId}">
+                <div>
+                    <label style="font-size:11px; color:#6b7280; font-weight:bold;">경비 구분</label>
+                    <select name="sub_receipt_categories" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;" required>
+                        <option value="">-- 선택 --</option>
+                        ${catOptions}
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:11px; color:#6b7280; font-weight:bold;">금액 (원)</label>
+                    <input type="number" name="sub_receipt_amounts" placeholder="0" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;" required>
+                </div>
+                <div>
+                    <button type="button" onclick="this.closest('.modal-receipt-row').remove()" style="padding:6px 10px; background:#ef4444; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">삭제</button>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+
         function openEditModal(btnElement) {
             const tripId = btnElement.getAttribute('data-trip-id');
             const date = btnElement.getAttribute('data-date');
@@ -138,6 +169,7 @@
 
                     const div = document.createElement('div');
                     div.className = 'modal-receipt-row';
+                    // 🌟 모달창 기존 항목에도 삭제 버튼 추가
                     div.innerHTML = `
                         <input type="hidden" name="sub_receipt_ids" value="${item.id}">
                         <div>
@@ -149,6 +181,9 @@
                         <div>
                             <label style="font-size:11px; color:#6b7280; font-weight:bold;">금액 (원)</label>
                             <input type="number" name="sub_receipt_amounts" value="${item.amount}" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px;" required>
+                        </div>
+                        <div>
+                            <button type="button" onclick="this.closest('.modal-receipt-row').remove()" style="padding:6px 10px; background:#ef4444; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">삭제</button>
                         </div>
                     `;
                     dynamicContainer.appendChild(div);
@@ -162,47 +197,6 @@
         function closeEditModal() {
             document.getElementById('editModal').style.display = 'none';
         }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const tbody = document.getElementById('drag_tbody');
-            if(!tbody) return;
-            
-            tbody.addEventListener('dragstart', (e) => {
-                if(e.target.closest('.drag-row')) {
-                    e.target.closest('.drag-row').classList.add('dragging');
-                }
-            });
-            tbody.addEventListener('dragend', (e) => {
-                if(e.target.closest('.drag-row')) {
-                    e.target.closest('.drag-row').classList.remove('dragging');
-                    reCalculateOrders();
-                }
-            });
-            tbody.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                const draggingRow = tbody.querySelector('.dragging');
-                if(!draggingRow) return;
-                
-                const siblings = [...tbody.querySelectorAll('.drag-row:not(.dragging)')];
-                const nextSibling = siblings.find(sibling => {
-                    const box = sibling.getBoundingClientRect();
-                    return e.clientY <= box.top + box.height / 2;
-                });
-                
-                if(nextSibling) {
-                    tbody.insertBefore(draggingRow, nextSibling);
-                } else {
-                    tbody.appendChild(draggingRow);
-                }
-            });
-            function reCalculateOrders() {
-                const rows = tbody.querySelectorAll('.drag-row');
-                rows.forEach((row, index) => {
-                    const orderInput = row.querySelector('.order-input');
-                    if(orderInput) orderInput.value = index + 1;
-                });
-            }
-        });
     </script>
 </head>
 <body onload="addReceiptLine()">
@@ -262,7 +256,7 @@
                 <canvas id="categoryPieChart"></canvas>
             </div>
             <div class="chart-box">
-                <canvas id="halfYearLineChart"></canvas>
+                <canvas id="twelveMonthLineChart"></canvas>
             </div>
         </div>
     </div>
@@ -277,14 +271,13 @@
         let categoryChartObj = null;
         let lineChartObj = null;
 
-        function getRecent6Months(targetMonth) {
+        // 🌟 수정: 선택된 해당 년도의 1월부터 12월까지 전체 타임라인 생성
+        function getYear12Months(targetMonthStr) {
             let result = [];
-            let date = new Date(targetMonth + "-01");
-            for (let i = 5; i >= 0; i--) {
-                let d = new Date(date.getFullYear(), date.getMonth() - i, 1);
-                let year = d.getFullYear();
-                let month = String(d.getMonth() + 1).padStart(2, '0');
-                result.push({ key: `${year}-${month}`, label: `${d.getMonth() + 1}월` });
+            let year = targetMonthStr.substring(0, 4);
+            for (let i = 1; i <= 12; i++) {
+                let monthStr = String(i).padStart(2, '0');
+                result.push({ key: `${year}-${monthStr}`, label: `${i}월` });
             }
             return result;
         }
@@ -333,30 +326,31 @@
 
             document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
 
-            function processTop8(mapData) {
+            // 🌟 수정: 상위 10개만 살리고 나머지는 '기타'로 합산
+            function processTop10(mapData) {
                 let sorted = Object.entries(mapData).sort((a, b) => b[1] - a[1]);
-                if (sorted.length <= 8) return sorted;
+                if (sorted.length <= 10) return sorted;
                 
-                let top8 = sorted.slice(0, 8);
-                let othersSum = sorted.slice(8).reduce((sum, item) => sum + item[1], 0);
-                top8.push(['나머지 기타 통합', othersSum]);
-                return top8;
+                let top10 = sorted.slice(0, 10);
+                let othersSum = sorted.slice(10).reduce((sum, item) => sum + item[1], 0);
+                top10.push(['기타 합산', othersSum]);
+                return top10;
             }
 
-            const topPlaces = processTop8(placeMap);
-            const topUsers = processTop8(userMap);
+            const topPlaces = processTop10(placeMap);
+            const topUsers = processTop10(userMap);
 
             if (placeChartObj) {
                 placeChartObj.data.labels = topPlaces.length ? topPlaces.map(x => x[0]) : ['데이터 없음'];
                 placeChartObj.data.datasets[0].data = topPlaces.length ? topPlaces.map(x => x[1]) : [0];
-                placeChartObj.options.plugins.title.text = `📍 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 출장지 순위 (상위 8위)`;
+                placeChartObj.options.plugins.title.text = `📍 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 출장지 순위 (상위 10위)`;
                 placeChartObj.update();
             }
 
             if (userChartObj) {
                 userChartObj.data.labels = topUsers.length ? topUsers.map(x => x[0]) : ['데이터 없음'];
                 userChartObj.data.datasets[0].data = topUsers.length ? topUsers.map(x => x[1]) : [0];
-                userChartObj.options.plugins.title.text = `👤 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 인원별 지출 순위 (상위 8위)`;
+                userChartObj.options.plugins.title.text = `👤 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 인원별 지출 순위 (상위 10위)`;
                 userChartObj.update();
             }
 
@@ -370,9 +364,10 @@
                 categoryChartObj.update();
             }
 
-            const recent6 = getRecent6Months(currentMonthStr);
+            // 🌟 수정: 최근 6개월 -> 선택 년도의 1월~12월 로직으로 변경
+            const year12 = getYear12Months(currentMonthStr);
             let trendMap = {};
-            recent6.forEach(m => trendMap[m.key] = 0);
+            year12.forEach(m => trendMap[m.key] = 0);
 
             const trendFiltered = (selectedTeam === 'ALL') 
                 ? rawStatsData 
@@ -388,13 +383,13 @@
                 }
             });
 
-            const lineData = recent6.map(m => trendMap[m.key]);
-            const lineLabels = recent6.map(m => m.label);
+            const lineData = year12.map(m => trendMap[m.key]);
+            const lineLabels = year12.map(m => m.label);
 
             if (lineChartObj) {
                 lineChartObj.data.labels = lineLabels;
                 lineChartObj.data.datasets[0].data = lineData;
-                lineChartObj.options.plugins.title.text = `📈 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] 최근 6개월 추이 그래프`;
+                lineChartObj.options.plugins.title.text = `📈 [${selectedTeam === 'ALL' ? '전사' : selectedTeam}] ${currentMonthStr.substring(0,4)}년도 전체 추이 그래프`;
                 lineChartObj.update();
             }
 
@@ -475,7 +470,7 @@
                 }
             });
 
-            const lineCtx = document.getElementById('halfYearLineChart').getContext('2d');
+            const lineCtx = document.getElementById('twelveMonthLineChart').getContext('2d');
             lineChartObj = new Chart(lineCtx, {
                 type: 'line',
                 data: {
@@ -562,11 +557,8 @@
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <h3 style="margin:0;">📊 {{ current_month }} 등록된 출장 정산 목록 
                     {% if team == "관리자" %}<span style="color:#2563eb;">(전사 부서 전체 통합 노출 모드)</span>{% endif %}
-                    <!-- 🌟 지능형 자동 정렬 안내 문구 추가 -->
                     <span style="font-size:12px; color:#10b981; font-weight:normal;">(💡 <b>시운전팀:</b> 이름순 정렬 / <b>그 외:</b> 날짜순 정렬 자동 적용)</span>
                 </h3>
-                <!-- 자동 정렬을 적용했으므로, 수동 저장 버튼은 만약을 위해 남겨두되 크게 신경 안 쓰셔도 됩니다. -->
-                <button type="submit" form="orderForm" class="btn-order" style="display:none;">🔄 순번 재정렬 저장</button>
             </div>
             
             <div style="background: #f1f5f9; padding: 10px; border-radius: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
@@ -587,7 +579,6 @@
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 40px;">이동</th>
                         <th style="width: 70px;">순번</th>
                         <th style="width: 100px;">신청부서</th>
                         <th>지출일자</th>
@@ -602,10 +593,9 @@
                 <tbody id="drag_tbody">
                     {% for trip in trips %}
                     <tr class="drag-row" draggable="true">
-                        <td class="drag-handle">☰</td>
                         <td>
                             <input type="hidden" name="trip_ids" value="{{ trip.trip_id }}">
-                            <input type="number" name="display_orders" value="{{ loop.index }}" class="order-input" style="width:40px; text-align:center;" readonly>
+                            <input type="number" name="display_orders" value="{{ loop.index }}" class="order-input" style="width:40px; text-align:center; border:none; background:transparent;" readonly>
                         </td>
                         <td><span class="team-badge">{{ trip.team }}</span></td>
                         <td>{{ trip.date }}</td>
@@ -658,6 +648,11 @@
                 
                 <h4 style="margin:20px 0 10px 0; color:#334155; border-bottom:1px solid #e2e8f0; padding-bottom:5px;">🧾 소속 영수증 금액 수정</h4>
                 <div id="edit_receipts_container"></div>
+                
+                <!-- 🌟 수정 모달 전용 영수증 항목 추가 버튼 탑재 -->
+                <div style="margin-top: 10px; text-align: left;">
+                    <button type="button" onclick="addModalReceiptLine()" style="padding:6px 12px; background:#10b981; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">➕ 영수증 항목 추가</button>
+                </div>
                 
                 <div style="margin-top:20px; text-align:right;">
                     <button type="button" class="btn-action" onclick="closeEditModal()" style="padding:8px 15px; background:#9ca3af; color:white; border:none; border-radius:4px; font-weight:bold;">취소</button>
