@@ -32,7 +32,9 @@
         .btn-toggle.active { background: #1e3a8a; color: white; border-color: #1e3a8a; box-shadow: 0 2px 4px rgba(30,58,138,0.2); }
 
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 25px; }
-        .stats-card { background: white; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .stats-card { background: white; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: transform 0.2s, box-shadow 0.2s; }
+        /* 🌟 추가됨: 카드를 눌러서 팀을 바꿀 수 있음을 알리는 클릭/오버 애니메이션 */
+        .stats-card:hover { transform: translateY(-4px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); cursor: pointer; }
         .stats-card h4 { margin: 0 0 10px 0; color: #475569; font-size: 14px; }
         .stats-card p { margin: 0; font-size: 18px; font-weight: bold; color: #1e3a8a; }
         
@@ -71,7 +73,6 @@
         
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); overflow-y: auto; }
         .modal-content { background: white; margin: 5% auto; padding: 25px; border-radius: 8px; width: 550px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
-        /* 🌟 수정 모달창 안의 영수증 삭제버튼을 위해 그리드 비율 조정 */
         .modal-receipt-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-bottom: 8px; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; align-items: end;}
     </style>
     <script>
@@ -110,7 +111,6 @@
             button.closest('.receipt-entry-row').remove();
         }
 
-        // 🌟 수정 모달창 전용: 영수증 행 추가 함수
         function addModalReceiptLine() {
             const container = document.getElementById('edit_receipts_container');
             let catOptions = '';
@@ -169,7 +169,6 @@
 
                     const div = document.createElement('div');
                     div.className = 'modal-receipt-row';
-                    // 🌟 모달창 기존 항목에도 삭제 버튼 추가
                     div.innerHTML = `
                         <input type="hidden" name="sub_receipt_ids" value="${item.id}">
                         <div>
@@ -216,9 +215,10 @@
         {% if team == "관리자" %}
         <h3 style="color: #0f172a; margin-top:0; border-bottom: 2px solid #0f172a; padding-bottom:10px;">📊 {{ current_month }} 전사 부서/출장지 통합 대시보드</h3>
         <div class="btn-toggle-group">
-            <button type="button" class="btn-toggle active" onclick="filterTeamStats('ALL', this)">🌐 전사 전체보기</button>
+            <!-- 🌟 추가됨: 버튼들이 클릭 대상을 찾기 쉽게 식별자(data-team)를 달아주었습니다 -->
+            <button type="button" class="btn-toggle active" data-team="ALL" onclick="filterTeamStats('ALL', this)">🌐 전사 전체보기</button>
             {% for team_name in teams %}
-            <button type="button" class="btn-toggle" onclick="filterTeamStats('{{ team_name }}', this)">
+            <button type="button" class="btn-toggle" data-team="{{ team_name }}" onclick="filterTeamStats('{{ team_name }}', this)">
                 {% if '법카' in team_name %}💳{% else %}🏢{% endif %} {{ team_name }}
             </button>
             {% endfor %}
@@ -228,7 +228,8 @@
         {% endif %}
 
         <div class="stats-grid">
-            <div class="stats-card" style="border-top: 4px solid #1e3a8a; background: #f0f4ff;">
+            <!-- 🌟 핵심 변경 사항: 카드를 누르면 해당 팀 버튼을 코드가 대신 꾹 눌러줍니다 (click 이벤트 발생) -->
+            <div class="stats-card" style="border-top: 4px solid #1e3a8a; background: #f0f4ff;" onclick="document.querySelector('.btn-toggle[data-team=\'ALL\']').click()">
                 <h4>선택 월 지출 총합</h4>
                 <p id="target_total_display" style="color:#1e3a8a; font-size:22px;">{{ "{:,.0f}".format(dashboard_stats.get('총합', 0)) }}원</p>
             </div>
@@ -237,7 +238,8 @@
                 {% set card_colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e', '#84cc16', '#64748b', '#0ea5e9'] %}
                 {% for team_name in teams %}
                     {% set color_code = card_colors[loop.index0 % card_colors|length] %}
-                <div class="stats-card" style="border-top: 4px solid {{ color_code }};">
+                <!-- 🌟 각각의 팀 카드에도 클릭 시 자기 부서 버튼을 누르도록 명령 탑재 -->
+                <div class="stats-card" style="border-top: 4px solid {{ color_code }};" onclick="document.querySelector('.btn-toggle[data-team=\'{{ team_name }}\']').click()">
                     <h4>{{ team_name }} 비용합계</h4>
                     <p id="accum_{{ team_name }}">{{ "{:,.0f}".format(dashboard_stats.get(team_name, 0)) }}원</p>
                 </div>
@@ -271,7 +273,6 @@
         let categoryChartObj = null;
         let lineChartObj = null;
 
-        // 🌟 수정: 선택된 해당 년도의 1월부터 12월까지 전체 타임라인 생성
         function getYear12Months(targetMonthStr) {
             let result = [];
             let year = targetMonthStr.substring(0, 4);
@@ -326,7 +327,6 @@
 
             document.getElementById('target_total_display').innerText = totalSum.toLocaleString() + "원";
 
-            // 🌟 수정: 상위 10개만 살리고 나머지는 '기타'로 합산
             function processTop10(mapData) {
                 let sorted = Object.entries(mapData).sort((a, b) => b[1] - a[1]);
                 if (sorted.length <= 10) return sorted;
@@ -364,7 +364,6 @@
                 categoryChartObj.update();
             }
 
-            // 🌟 수정: 최근 6개월 -> 선택 년도의 1월~12월 로직으로 변경
             const year12 = getYear12Months(currentMonthStr);
             let trendMap = {};
             year12.forEach(m => trendMap[m.key] = 0);
@@ -493,7 +492,7 @@
             setTimeout(() => {
                 let initialTeam = userTeam;
                 if (initialTeam === "관리자") {
-                    filterTeamStats('ALL', document.querySelector('.btn-toggle'));
+                    filterTeamStats('ALL', document.querySelector('.btn-toggle[data-team="ALL"]'));
                 } else {
                     filterTeamStats(initialTeam, null);
                 }
@@ -649,7 +648,6 @@
                 <h4 style="margin:20px 0 10px 0; color:#334155; border-bottom:1px solid #e2e8f0; padding-bottom:5px;">🧾 소속 영수증 금액 수정</h4>
                 <div id="edit_receipts_container"></div>
                 
-                <!-- 🌟 수정 모달 전용 영수증 항목 추가 버튼 탑재 -->
                 <div style="margin-top: 10px; text-align: left;">
                     <button type="button" onclick="addModalReceiptLine()" style="padding:6px 12px; background:#10b981; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">➕ 영수증 항목 추가</button>
                 </div>
