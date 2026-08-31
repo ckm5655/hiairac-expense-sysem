@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, s
 import json
 import os
 import uuid
+import time
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
@@ -66,23 +67,45 @@ except Exception as e:
 
 HEADERS = ["trip_id", "order", "team", "date", "user", "place", "content", "items_desc", "total_amount", "details_json"]
 
-def get_all_trips():
-    if not ws: return []
+# 🌟 빈칸/특수문자 에러 방어 로직
+def safe_int(val, default=0):
+    try:
+        if val is None or str(val).strip() == "": return default
+        return int(str(val).replace(',', '').strip())
+    except:
+        return default
+
+# 🌟 트래픽 과부하 방어 캐시
+CACHE = {'data': [], 'last_update': 0}
+
+def get_all_trips(force_refresh=False):
+    global CACHE
+    current_time = time.time()
+    if not force_refresh and (current_time - CACHE['last_update'] < 2) and CACHE['data']:
+        return CACHE['data']
+    if not ws: return CACHE['data']
+    
     try:
         records = ws.get_all_records()
+        valid_records = []
         for r in records:
-            r['order'] = int(r.get('order') if r.get('order') else 999)
-            r['total_amount'] = int(r.get('total_amount') if r.get('total_amount') else 0)
-            r['trip_id'] = str(r.get('trip_id', ''))
-        return sorted(records, key=lambda x: x['order'])
+            if str(r.get('trip_id', '')).strip():
+                r['order'] = safe_int(r.get('order'), 999)
+                r['total_amount'] = safe_int(r.get('total_amount'), 0)
+                r['trip_id'] = str(r.get('trip_id', '')).strip()
+                valid_records.append(r)
+                
+        CACHE['data'] = sorted(valid_records, key=lambda x: x['order'])
+        CACHE['last_update'] = current_time
+        return CACHE['data']
     except Exception as e:
         print("데이터 로드 에러:", e)
-        return []
+        return CACHE['data']
 
 def is_match_team(db_team, target_team):
     if not db_team or not target_team: return False
     return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
-        
+
 # ==========================================
 # 라우팅 (페이지 기능)
 # ==========================================
@@ -139,7 +162,7 @@ def index():
         t_team = str(t.get('team', '')).strip()
         t_date = str(t.get('date', ''))
         t_user = str(t.get('user', ''))
-        t_order = int(t.get('order', 999))
+        t_order = safe_int(t.get('order'), 999)
         if t_team == '시운전팀': return (0, t_user, t_date, t_order)
         else: return (1, t_date, t_order, t_user)
             
@@ -157,11 +180,11 @@ def index():
             stat_item = {
                 "date": t.get('date', ''), "team": t.get('team', ''),
                 "place": t.get('place', ''), "user": t.get('user', '알수없음'), 
-                "category": item.get('category', '기타'), "amount": int(item.get('amount', 0))
+                "category": item.get('category', '기타'), "amount": safe_int(item.get('amount'), 0)
             }
             raw_stats_list.append(stat_item)
             
-            amt = int(item.get('amount', 0))
+            amt = safe_int(item.get('amount'), 0)
             dashboard_stats['총합'] += amt
             
             raw_team = str(t.get('team', '')).strip()
@@ -193,8 +216,7 @@ def add_expense():
     details, total_amount, desc_parts = [], 0, []
     for i in range(len(receipt_cats)):
         cat = receipt_cats[i]
-        try: amt = int(receipt_amts[i]) if receipt_amts[i] else 0
-        except: amt = 0
+        amt = safe_int(receipt_amts[i] if i < len(receipt_amts) else 0)
         if cat and amt > 0:
             details.append({"id": f"r_{uuid.uuid4().hex[:6]}", "category": cat, "amount": amt})
             total_amount += amt
@@ -210,11 +232,19 @@ def add_expense():
     }
     
     try:
-        new_row = [str(new_trip.get(h, "")) for h in HEADERS]
-        ws.append_row(new_row)
+        # 🌟 안정적인 전체 업데이트 방식으로 복구
+        records = ws.get_all_records()
+        valid_records = [r for r in records if str(r.get('trip_id', '')).strip()]
+        valid_records.append(new_trip)
+        
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        ws.update(range_name="A1", values=values)
+        get_all_trips(force_refresh=True)
     except Exception as e:
         print("데이터 저장 실패:", e)
-        return f"<script>alert('서버 저장 중 오류가 발생했습니다.'); history.back();</script>"
+        return f"<script>alert('서버 저장 중 통신 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -228,8 +258,9 @@ def edit_submit():
     
     try:
         records = ws.get_all_records()
-        for i, r in enumerate(records):
-            if str(r.get('trip_id')) == str(trip_id):
+        valid_records = []
+        for r in records:
+            if str(r.get('trip_id', '')).strip() == str(trip_id):
                 t = r
                 t['date'] = request.form.get('date')
                 t['user'] = request.form.get('user')
@@ -238,10 +269,8 @@ def edit_submit():
                 
                 new_details, total_amount, desc_parts = [], 0, []
                 for j in range(len(sub_ids)):
-                    try: amt = int(sub_amounts[j])
-                    except: amt = 0
+                    amt = safe_int(sub_amounts[j] if j < len(sub_amounts) else 0)
                     cat = sub_categories[j]
-                    # 🌟 0원 항목이나 카테고리가 없는 빈 데이터는 무시하도록 방어 로직 추가
                     if cat and amt > 0:
                         new_details.append({"id": sub_ids[j], "category": cat, "amount": amt})
                         total_amount += amt
@@ -250,10 +279,15 @@ def edit_submit():
                 t['total_amount'] = total_amount
                 t['items_desc'] = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
                 t['details_json'] = json.dumps(new_details, ensure_ascii=False)
+                valid_records.append(t)
+            elif str(r.get('trip_id', '')).strip():
+                valid_records.append(r)
                 
-                new_row = [str(t.get(h, "")) for h in HEADERS]
-                ws.update(range_name=f"A{i+2}", values=[new_row])
-                break
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        ws.update(range_name="A1", values=values)
+        get_all_trips(force_refresh=True)
     except Exception as e:
         print("데이터 수정 실패:", e)
         return f"<script>alert('서버 수정 중 오류가 발생했습니다.'); history.back();</script>"
@@ -266,14 +300,19 @@ def reorder():
     search_month = request.form.get('search_month')
     try:
         records = ws.get_all_records()
-        for r in records: r['order'] = int(r.get('order') if r.get('order') else 999)
+        valid_records = [r for r in records if str(r.get('trip_id', '')).strip()]
+        for r in valid_records: r['order'] = safe_int(r.get('order'), 999)
         for index, tid in enumerate(trip_ids):
-            for r in records:
+            for r in valid_records:
                 if str(r.get('trip_id')) == str(tid):
                     r['order'] = index + 1
                     break
-        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in records]
+                    
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
         ws.update(range_name="A1", values=values)
+        get_all_trips(force_refresh=True)
     except Exception as e:
         print("순번 정렬 실패:", e)
     return redirect(url_for('index', search_month=search_month))
@@ -283,10 +322,13 @@ def delete_expense(trip_id):
     search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
     try:
         records = ws.get_all_records()
-        for i, r in enumerate(records):
-            if str(r.get('trip_id')) == str(trip_id):
-                ws.delete_rows(i + 2) 
-                break
+        valid_records = [r for r in records if str(r.get('trip_id', '')).strip() and str(r.get('trip_id', '')) != str(trip_id)]
+        
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        ws.update(range_name="A1", values=values)
+        get_all_trips(force_refresh=True)
     except Exception as e:
         print("데이터 삭제 실패:", e)
     return redirect(url_for('index', search_month=search_month))
@@ -309,7 +351,7 @@ def download_cover():
             t_team = str(t.get('team', '')).strip()
             t_date = str(t.get('date', ''))
             t_user = str(t.get('user', ''))
-            t_order = int(t.get('order', 999))
+            t_order = safe_int(t.get('order'), 999)
             if t_team == '시운전팀': return (0, t_user, t_date, t_order)
             else: return (1, t_date, t_order, t_user)
             
@@ -322,17 +364,24 @@ def download_cover():
         font_main = Font(name='맑은 고딕', size=10)
         font_sum = Font(name='맑은 고딕', size=11, bold=True)
         thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-        fill_header = PatternFill(start_color='F3F4F6', end_color='F3F4F6', fill_type='solid')
-        fill_sum = PatternFill(start_color='EBF5FF', end_color='EBF5FF', fill_type='solid')
+        fill_sum = PatternFill(start_color='E6F0FF', end_color='E6F0FF', fill_type='solid')
         align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
         align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
         align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
 
         ws1 = wb.active
         ws1.title = f"{target_month[5:7]}월 정산서"
+        
+        ws1.page_setup.fitToPage = True
+        ws1.page_setup.fitToWidth = 1
+        ws1.page_setup.fitToHeight = 0
+        ws1.page_margins.left = 0.25
+        ws1.page_margins.right = 0.25
+
         ws1.merge_cells('A1:E2')
         ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
-        ws1['A1'].font = font_title; ws1['A1'].alignment = align_left
+        ws1['A1'].font = font_title
+        ws1['A1'].alignment = align_left
 
         display_categories = ["교통비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
         headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)"] + display_categories + ["사용자"]
@@ -341,28 +390,28 @@ def download_cover():
         for i, h in enumerate(approve_headers):
             col_idx = 9 + i 
             cell = ws1.cell(row=1, column=col_idx, value=h)
-            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
-            cell.fill = PatternFill(start_color='F9FAFB', end_color='F9FAFB', fill_type='solid')
+            cell.font = font_main; cell.alignment = align_center; cell.border = thin_border
             ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
             for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
             
-        ws1.row_dimensions[1].height = 24
-        ws1.row_dimensions[2].height = 24
-        ws1.row_dimensions[3].height = 24
+        ws1.row_dimensions[1].height = 20
+        ws1.row_dimensions[2].height = 20
+        ws1.row_dimensions[3].height = 20
 
         ws1.merge_cells('A4:E4')
         ws1['A4'] = f"작성일자: {datetime.now().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
         ws1['A4'].font = font_main
-        ws1.row_dimensions[4].height = 24
+        ws1.row_dimensions[4].height = 20
 
         for col_idx, h in enumerate(headers1, 1):
             cell = ws1.cell(row=5, column=col_idx, value=h)
-            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
-        ws1.row_dimensions[5].height = 32
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
+        ws1.row_dimensions[5].height = 25
 
         r_idx = 6
         for idx, trip in enumerate(raw_data, 1):
             ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
+            
             raw_date = str(trip.get('date', ''))
             ws1.cell(row=r_idx, column=2, value=raw_date[-2:] if len(raw_date)>=10 else raw_date).alignment = align_center
             
@@ -370,7 +419,7 @@ def download_cover():
             ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
             ws1.cell(row=r_idx, column=4, value=trip.get('place', '')).alignment = align_center
             
-            t_cell = ws1.cell(row=r_idx, column=5, value=int(trip.get('total_amount', 0)))
+            t_cell = ws1.cell(row=r_idx, column=5, value=safe_int(trip.get('total_amount', 0)))
             t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
             
             cat_sums = {c: 0 for c in display_categories}
@@ -378,7 +427,7 @@ def download_cover():
                 details = json.loads(trip.get('details_json', '[]'))
                 for item in details:
                     c_name = item.get('category', '기타')
-                    amt = int(item.get('amount', 0))
+                    amt = safe_int(item.get('amount', 0))
                     if c_name in ['교통비', '주차비']: cat_sums['교통비'] += amt
                     elif c_name in ['운반비', '기타']: cat_sums['기타'] += amt
                     elif c_name in cat_sums: cat_sums[c_name] += amt
@@ -397,7 +446,7 @@ def download_cover():
                 if c != 5: cell.font = font_main
                 cell.border = thin_border
                 
-            ws1.row_dimensions[r_idx].height = 28
+            ws1.row_dimensions[r_idx].height = 25
             r_idx += 1
 
         sum_row_idx = r_idx
@@ -414,12 +463,13 @@ def download_cover():
             sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
             sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
             
-        ws1.row_dimensions[sum_row_idx].height = 30
+        ws1.row_dimensions[sum_row_idx].height = 25
 
         team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
-        total_expense = sum(int(t.get('total_amount', 0)) for t in raw_data)
+        total_expense = sum(safe_int(t.get('total_amount', 0)) for t in raw_data)
         
         r_idx += 2
+        
         ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
         summary_cell = ws1.cell(row=r_idx, column=1)
         
@@ -429,17 +479,19 @@ def download_cover():
         else:
             summary_cell.value = f"전체 통합 경비 합계액 [ {total_expense:,.0f} ] 원"
             
-        summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='1F2937')
+        summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='000000')
         summary_cell.alignment = align_center
-        ws1.row_dimensions[r_idx].height = 36
+        ws1.row_dimensions[r_idx].height = 35
 
-        widths1 = {1: 4, 2: 4, 3: 40, 4: 5} 
-        for i in range(5, 13): widths1[i] = 9 
-        
+        widths1 = {1: 4.5, 2: 4.5, 3: 45, 4: 9, 5: 11, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10, 12: 9} 
         for col_idx, w in widths1.items():
             ws1.column_dimensions[get_column_letter(col_idx)].width = w
 
         ws2 = wb.create_sheet(title="상세내역")
+        ws2.page_setup.fitToPage = True
+        ws2.page_setup.fitToWidth = 1
+        ws2.page_setup.fitToHeight = 0
+        
         ws2.merge_cells('A1:C2')
         ws2['A1'] = "지출 항목별 상세 증빙내역"
         ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
@@ -448,7 +500,7 @@ def download_cover():
         headers2 = ["순번", "사용일자", "부서명", "사용자", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
         for col_idx, h in enumerate(headers2, 1):
             cell = ws2.cell(row=4, column=col_idx, value=h)
-            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border; cell.fill = fill_header
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
             
         d_idx = 5
         detail_count = 1
@@ -464,7 +516,7 @@ def download_cover():
                     ws2.cell(row=d_idx, column=6, value=trip.get('content', '')).alignment = align_left
                     ws2.cell(row=d_idx, column=7, value=trip.get('place', '')).alignment = align_center
                     
-                    amt_cell = ws2.cell(row=d_idx, column=8, value=int(item.get('amount', 0)))
+                    amt_cell = ws2.cell(row=d_idx, column=8, value=safe_int(item.get('amount', 0)))
                     amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
                     ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
                     
