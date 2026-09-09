@@ -156,6 +156,8 @@ def index():
     month_end_date = f"{current_month}-31"
     
     ALL_TRIPS = get_all_trips()
+    
+    # 🌟 하단 목록에 보여줄 '이번 달' 데이터만 별도 필터링
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
     
     def custom_sort(t):
@@ -173,10 +175,16 @@ def index():
     for t_name in TEAMS_LIST:
         dashboard_stats[t_name] = 0
     
-    for t in filtered_trips:
+    # 🌟 핵심 수정: 차트용 데이터는 필터링 되지 않은 1년 치 전체(ALL_TRIPS)를 순회합니다.
+    for t in ALL_TRIPS:
         try: details = json.loads(t.get('details_json', '[]'))
         except: details = []
+        
+        # 이 데이터가 이번 달 데이터인지 확인하는 라벨링
+        is_current_month = str(t.get('date', '')).startswith(current_month)
+        
         for item in details:
+            # 1. 12개월 추이 그래프를 위해 모든 달의 데이터를 raw_stats_list에 추가
             stat_item = {
                 "date": t.get('date', ''), "team": t.get('team', ''),
                 "place": t.get('place', ''), "user": t.get('user', '알수없음'), 
@@ -184,14 +192,16 @@ def index():
             }
             raw_stats_list.append(stat_item)
             
-            amt = safe_int(item.get('amount'), 0)
-            dashboard_stats['총합'] += amt
-            
-            raw_team = str(t.get('team', '')).strip()
-            std_team = raw_team
-            if std_team not in TEAMS_LIST:
-                if std_team + '팀' in TEAMS_LIST: std_team += '팀'
-            if std_team in dashboard_stats: dashboard_stats[std_team] += amt
+            # 2. 상단 카드 요약(dashboard_stats)은 오직 '이번 달' 데이터일 때만 합산
+            if is_current_month:
+                amt = safe_int(item.get('amount'), 0)
+                dashboard_stats['총합'] += amt
+                
+                raw_team = str(t.get('team', '')).strip()
+                std_team = raw_team
+                if std_team not in TEAMS_LIST:
+                    if std_team + '팀' in TEAMS_LIST: std_team += '팀'
+                if std_team in dashboard_stats: dashboard_stats[std_team] += amt
 
     return render_template('index.html', username=username, team=team, current_month=current_month,
         month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
