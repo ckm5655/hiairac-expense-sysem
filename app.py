@@ -11,7 +11,7 @@ from io import BytesIO
 import gspread
  
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
+app.secret_key = 'your_secret_key_here' 
 
 # ==========================================
 # ⚙️ 시스템 기본 설정 (부서/예산/계정 관리)
