@@ -18,18 +18,9 @@ app.secret_key = 'your_secret_key_here'
 # ==========================================
 
 TEAM_BUDGETS = {
-    "시운전팀": 1000000,
-    "생산팀": 500000,
-    "판금생산팀" : 0,
-    "기술생산설계팀": 0,
-    "영업팀": 500000,
-    "영업2팀": 0,
-    "영업3팀": 0,
-    "전장팀": 800000,
-    "법카2536": 0,
-    "법카6035": 0,
-    "법카7547": 0,
-    "법카0624": 0
+    "시운전팀": 1000000, "생산팀": 500000, "판금생산팀" : 0, "기술생산설계팀": 0,
+    "영업팀": 500000, "영업2팀": 0, "영업3팀": 0, "전장팀": 800000,
+    "법카2536": 0, "법카6035": 0, "법카7547": 0, "법카0624": 0
 }
 TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
@@ -52,15 +43,12 @@ USER_CREDENTIALS = {
 CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
 
 # ==========================================
-# 🌟 구글 스프레드시트 DB 연동 & 자동 재연결 세팅 🌟
+# 🌟 구글 스프레드시트 DB 연동 & 자동 재연결 세팅
 # ==========================================
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
 
-gc = None
-doc = None
-ws = None
+gc = None; doc = None; ws = None
 
-# 🌟 1. 연결이 끊기면 다시 연결해주는 함수
 def connect_google_sheet():
     global gc, doc, ws
     try:
@@ -71,10 +59,8 @@ def connect_google_sheet():
     except Exception as e:
         print("❌ 구글 시트 연결 실패:", e)
 
-# 최초 1회 연결
 connect_google_sheet()
 
-# 🌟 2. 엑셀 조작 전, 끊겼으면 재연결을 시도하는 철벽 방어막 함수들
 def safe_get_all_records():
     try: return ws.get_all_records()
     except:
@@ -103,6 +89,8 @@ def safe_int(val, default=0):
     except:
         return default
 
+HEADERS = ["trip_id", "order", "team", "date", "user", "place", "content", "items_desc", "total_amount", "details_json"]
+
 CACHE = {'data': [], 'last_update': 0}
 
 def get_all_trips(force_refresh=False):
@@ -112,7 +100,6 @@ def get_all_trips(force_refresh=False):
         return CACHE['data']
     
     try:
-        # 안전한 함수로 데이터 불러오기
         records = safe_get_all_records()
         valid_records = []
         for r in records:
@@ -184,7 +171,7 @@ def index():
     
     ALL_TRIPS = get_all_trips()
     
-    # 🌟 하단 목록에 보여줄 '이번 달' 데이터만 별도 필터링
+    # 🌟 목록 표에 보여줄 이번 달 데이터만 자르기
     filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
     
     def custom_sort(t):
@@ -202,16 +189,15 @@ def index():
     for t_name in TEAMS_LIST:
         dashboard_stats[t_name] = 0
     
-    # 🌟 핵심 수정: 차트용 데이터는 필터링 되지 않은 1년 치 전체(ALL_TRIPS)를 순회합니다.
+    # 🚨 가장 중요한 핵심: 그래프를 위해 1년 치가 담겨있는 ALL_TRIPS를 돌려야 합니다!
     for t in ALL_TRIPS:
         try: details = json.loads(t.get('details_json', '[]'))
         except: details = []
         
-        # 이 데이터가 이번 달 데이터인지 확인하는 라벨링
         is_current_month = str(t.get('date', '')).startswith(current_month)
         
         for item in details:
-            # 1. 12개월 추이 그래프를 위해 모든 달의 데이터를 raw_stats_list에 추가
+            # 1. 1년 치 전체 데이터를 무조건 추가 (12개월 그래프용)
             stat_item = {
                 "date": t.get('date', ''), "team": t.get('team', ''),
                 "place": t.get('place', ''), "user": t.get('user', '알수없음'), 
@@ -219,7 +205,7 @@ def index():
             }
             raw_stats_list.append(stat_item)
             
-            # 2. 상단 카드 요약(dashboard_stats)은 오직 '이번 달' 데이터일 때만 합산
+            # 2. 상단 비용 합계 네모 박스는 이번 달(is_current_month) 데이터만 합산
             if is_current_month:
                 amt = safe_int(item.get('amount'), 0)
                 dashboard_stats['총합'] += amt
@@ -270,12 +256,11 @@ def add_expense():
     
     try:
         new_row = [str(new_trip.get(h, "")) for h in HEADERS]
-        # 🌟 안전 추가 함수 사용
         safe_append_row(new_row)
         get_all_trips(force_refresh=True)
     except Exception as e:
         print("데이터 저장 실패:", e)
-        return f"<script>alert('서버 저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        return f"<script>alert('서버 저장 중 통신 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
         
     return redirect(url_for('index', search_month=search_month))
 
@@ -288,7 +273,6 @@ def edit_submit():
     sub_amounts = request.form.getlist('sub_receipt_amounts')
     
     try:
-        # 🌟 안전 조회 함수 사용
         records = safe_get_all_records()
         valid_records = []
         for r in records:
@@ -318,7 +302,6 @@ def edit_submit():
         values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
         empty_row = [""] * len(HEADERS)
         values.extend([empty_row] * 30)
-        # 🌟 안전 덮어쓰기 함수 사용
         safe_update("A1", values)
         get_all_trips(force_refresh=True)
     except Exception as e:
