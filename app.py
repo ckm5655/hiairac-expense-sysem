@@ -1,991 +1,568 @@
-import streamlit as st
-import pandas as pd
-from datetime import datetime, date, timedelta
-import calendar
-import plotly.express as px
-from streamlit_gsheets import GSheetsConnection
-import re
+from flask import Flask, render_template, request, redirect, url_for, session, send_file
+import json
+import os
 import uuid
+import time
+from datetime import datetime
+import openpyxl
+from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
+from io import BytesIO
+import gspread
 
-st.set_page_config(page_title="우리집 가계부", page_icon="💕", layout="centered")
+app = Flask(__name__)
+app.secret_key = 'your_secret_key_here'
 
-st.markdown("""
-<style>
-    /* 월 네비게이션 1줄 강제 고정 및 모바일 밀림 방지 */
-    div[data-testid="stHorizontalBlock"]:has(.month-nav-anchor) {
-        flex-wrap: nowrap !important;
-        align-items: center !important;
-    }
-    div[data-testid="stHorizontalBlock"]:has(.month-nav-anchor) > div {
-        min-width: 0 !important; 
-        padding-left: 2px !important;
-        padding-right: 2px !important;
-    }
-    
-    /* 투명 버튼화 (내역 전체 영역 터치 가능 및 1줄 고정) */
-    button[kind="tertiary"] {
-        text-align: left !important;
-        justify-content: flex-start !important;
-        padding: 12px 8px !important;
-        border-radius: 8px !important;
-        border: none !important;
-        background-color: transparent !important;
-        border-bottom: 1px solid #f0f4f8 !important;
-        color: #1e293b !important;
-        margin-bottom: 2px !important;
-        height: auto !important;
-    }
-    button[kind="tertiary"]:hover {
-        background-color: #f8fafc !important;
-    }
-    button[kind="tertiary"] div {
-        width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 14px;
-    }
-    
-    /* 설정 탭 버튼용 얇은 여백 */
-    .settings-btn button[kind="tertiary"] {
-        padding: 8px 4px !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+# ==========================================
+# ⚙️ 시스템 기본 설정 (부서/예산/계정 관리)
+# ==========================================
 
-# --- 🔒 비밀번호 인증 로직 시작 ---
-def check_password():
-    """비밀번호가 일치하면 True를 반환합니다."""
-    # 이미 인증을 통과했다면 패스
-    if st.session_state.get("password_correct", False):
-        return True
+TEAM_BUDGETS = {
+    "시운전팀": 1000000, "생산팀": 500000, "판금생산팀" : 0, "기술생산설계팀": 0,
+    "영업팀": 500000, "영업2팀": 0, "영업3팀": 0, "전장팀": 800000,
+    "법카2536": 0, "법카6035": 0, "법카7547": 0, "법카0624": 0
+}
+TEAMS_LIST = list(TEAM_BUDGETS.keys())
 
-    # 세련된 잠금 화면 UI
-    st.markdown("""
-    <style>
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-30px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes pulseLock {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-            100% { transform: scale(1); }
-        }
-        .lock-wrapper {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 50px 30px;
-            margin-top: 8vh;
-            background: linear-gradient(145deg, #ffffff, #f8fafc);
-            border-radius: 28px;
-            box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(0,0,0,0.02);
-            border: 1px solid #f1f5f9;
-            animation: slideDown 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-            max-width: 400px;
-            margin-left: auto;
-            margin-right: auto;
-            text-align: center;
-        }
-        .lock-emoji {
-            font-size: 65px;
-            margin-bottom: 15px;
-            animation: pulseLock 2.5s infinite ease-in-out;
-            filter: drop-shadow(0 10px 15px rgba(59, 130, 246, 0.2));
-        }
-        .lock-title {
-            font-size: 30px;
-            font-weight: 800;
-            margin-bottom: 10px;
-            background: linear-gradient(90deg, #0f172a, #3b82f6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: -0.5px;
-        }
-        .lock-desc {
-            font-size: 15px;
-            color: #64748b;
-            line-height: 1.6;
-            margin-bottom: 10px;
-            font-weight: 500;
-        }
-    </style>
-    
-    <div class="lock-wrapper">
-        <div class="lock-emoji">🔐</div>
-        <div class="lock-title">우리집 가계부</div>
-        <div class="lock-desc">프라이빗 자산 관리를 시작합니다.<br>안전한 접속을 위해 비밀번호를 입력해주세요.</div>
-    </div>
-    <br>
-    """, unsafe_allow_html=True)
+USER_CREDENTIALS = {
+    "admin": {"password": "01234", "name": "관리자", "team": "관리자"},
+    "시운전": {"password": "1234", "name": "시운전", "team": "시운전팀"},
+    "생산": {"password": "1234", "name": "생산", "team": "생산팀"},
+    "판금": {"password": "1234", "name": "판금생산", "team": "판금생산팀"},
+    "기술생산설계": {"password": "1234", "name": "기술생산설계", "team": "기술생산설계팀"},
+    "영업": {"password": "1234", "name": "영업", "team": "영업팀"},
+    "영업2": {"password": "1234", "name": "영업2", "team": "영업2팀"},
+    "영업3": {"password": "1234", "name": "영업3", "team": "영업3팀"},
+    "전장": {"password": "1234", "name": "전장", "team": "전장팀"},
+    "법카2536": {"password": "1234", "name": "법카2536", "team": "법카2536"},
+    "법카6035": {"password": "1234", "name": "법카6035", "team": "법카6035"},
+    "법카7547": {"password": "1234", "name": "법카7547", "team": "법카7547"},
+    "법카0624": {"password": "1234", "name": "법카0624", "team": "법카0624"}
+}
 
-    def password_entered():
-        # secrets에 저장된 비밀번호를 가져옴 (기본값: 1234)
-        correct_pw = st.secrets.get("app_password", "1234")
-        if st.session_state["password_input"] == str(correct_pw):
-            st.session_state["password_correct"] = True
-            del st.session_state["password_input"] # 보안상 입력값 삭제
-        else:
-            st.session_state["password_correct"] = False
+CATEGORIES = ["교통비", "주차비", "식비", "숙박비", "소모품비", "차량유지비", "운반비", "기타"]
 
-    st.text_input("🔑", type="password", on_change=password_entered, key="password_input", placeholder="비밀번호를 입력하고 Enter를 누르세요", label_visibility="collapsed")
+# ==========================================
+# 🌟 구글 스프레드시트 DB 연동 & 자동 재연결 세팅
+# ==========================================
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1wJrlVE1RfDR48T4IliC2xjsvHXC-6gpWUZBeCqUxflE/edit?gid=0#gid=0"
 
-    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        st.error("🚫 비밀번호가 일치하지 않습니다. 다시 시도해주세요.")
+gc = None; doc = None; ws = None
 
-    return False
-
-# 인증을 통과하지 못하면 여기서 앱 실행을 멈춤 (아래 가계부 내용은 안 보임)
-if not check_password():
-    st.stop()
-# --- 🔒 비밀번호 인증 로직 끝 ---
-
-def custom_progress_bar(current, target, is_expense=True, label=""):
-    if target <= 0: return
-    ratio = current / target
-    pct = min(ratio * 100, 100)
-    
-    if is_expense:
-        if ratio < 0.5: color = "#28a745" # 안전(초록)
-        elif ratio < 0.8: color = "#ffc107" # 경고(노랑)
-        else: color = "#dc3545" # 위험(빨강)
-    else:
-        color = "#3b82f6" # 저축(파랑)
-        
-    st.markdown(f"""
-    <div style="margin-bottom: 10px; padding: 15px; background-color: white; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; font-weight: bold; color: #1e293b;">
-            <span>{label}</span>
-            <span style="color: #0f172a;">{current:,.0f} / {target:,.0f}원 ({ratio*100:.1f}%)</span>
-        </div>
-        <div style="width: 100%; background-color: #e2e8f0; border-radius: 8px; height: 12px; overflow: hidden;">
-            <div style="width: {pct}%; background-color: {color}; height: 100%; border-radius: 8px; transition: width 0.5s ease-in-out;"></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def parse_amount(expr):
+def connect_google_sheet():
+    global gc, doc, ws
     try:
-        expr = str(expr).replace(',', '').replace(' ', '')
-        clean_expr = re.sub(r'[^0-9+\-*/().]', '', expr)
-        if not clean_expr: return 0
-        return int(eval(clean_expr))
-    except: return 0
-
-conn = st.connection("gsheets", type=GSheetsConnection)
-default_columns = ["id", "date", "type", "amount", "asset_out", "asset_in", "category", "memo"]
-
-@st.cache_data(show_spinner=False, ttl="10m")
-def fetch_gsheets_data():
-    try:
-        df_raw = conn.read(worksheet="Transactions", ttl=0)
-        settings_raw = conn.read(worksheet="Settings", ttl=0)
-        
-        # 데이터가 아예 없는 경우에만 뼈대 생성 (원본 데이터 보호 로직)
-        if df_raw is None or (not df_raw.empty and 'amount' not in df_raw.columns):
-            df_raw = pd.DataFrame(columns=default_columns)
-            
-        if settings_raw is None or (not settings_raw.empty and '설정구분' not in settings_raw.columns):
-            settings_raw = pd.DataFrame(columns=["설정구분", "항목이름", "계좌종류", "연결계좌", "정산일", "결제일", "초기잔액"])
-            
-        return df_raw, settings_raw, True, ""
+        gc = gspread.service_account(filename='credentials.json')
+        doc = gc.open_by_url(SHEET_URL)
+        ws = doc.sheet1
+        print("✅ 구글 시트 연결 (재)성공!")
     except Exception as e:
-        # 에러 발생 시 덮어쓰지 않고 빈 껍데기만 임시 반환하여 원본 보호
-        return pd.DataFrame(columns=default_columns), pd.DataFrame(), False, str(e)
+        print("❌ 구글 시트 연결 실패:", e)
 
-df, settings_df, use_gsheets, gsheets_error_msg = fetch_gsheets_data()
-if not df.empty and 'id' in df.columns: df['id'] = df['id'].astype(str)
+connect_google_sheet()
 
-def save_settings():
-    if use_gsheets:
-        rows = []
-        for cat in st.session_state.exp_categories: rows.append({"설정구분": "지출분류", "항목이름": cat})
-        for cat in st.session_state.inc_categories: rows.append({"설정구분": "수입분류", "항목이름": cat})
-        for atype in st.session_state.asset_types: rows.append({"설정구분": "자산종류", "항목이름": atype})
-        
-        rows.append({"설정구분": "예산목표", "항목이름": "월지출", "초기잔액": st.session_state.monthly_budget})
-        for acc_name, goal in st.session_state.asset_goals.items():
-            rows.append({"설정구분": "자산목표", "항목이름": acc_name, "초기잔액": goal})
-            
-        for acc_name, acc_data in st.session_state.accounts.items():
-            rows.append({
-                "설정구분": "계좌", "항목이름": acc_name, "계좌종류": acc_data.get("type"), "연결계좌": acc_data.get("linked"),
-                "정산일": acc_data.get("settle_day"), "결제일": acc_data.get("pay_day"), "초기잔액": acc_data.get("initial_balance")
-            })
-        new_settings_df = pd.DataFrame(rows, columns=["설정구분", "항목이름", "계좌종류", "연결계좌", "정산일", "결제일", "초기잔액"])
-        try: 
-            conn.update(worksheet="Settings", data=new_settings_df)
-            fetch_gsheets_data.clear() 
-        except Exception: pass
+def safe_get_all_records():
+    try: return ws.get_all_records()
+    except:
+        print("⚠️ 연결 끊김 감지! 즉시 재연결합니다 (읽기)")
+        connect_google_sheet()
+        return ws.get_all_records()
 
-def save_data(new_df):
-    if use_gsheets:
-        conn.update(worksheet="Transactions", data=new_df)
-        fetch_gsheets_data.clear() 
-    else: st.session_state.transactions = new_df
+def safe_append_row(row):
+    try: ws.append_row(row)
+    except:
+        print("⚠️ 연결 끊김 감지! 즉시 재연결합니다 (추가)")
+        connect_google_sheet()
+        ws.append_row(row)
 
-if 'exp_categories' not in st.session_state: st.session_state.exp_categories = ["식사/음료", "마트/생필품", "교통/차량", "문화/생활", "주거/통신", "개인사용"]
-if 'inc_categories' not in st.session_state: st.session_state.inc_categories = ["월급", "기타수입", "보너스"]
-if 'asset_types' not in st.session_state: st.session_state.asset_types = ["은행", "예적금", "투자", "신용카드", "체크카드", "집계제외"]
-if 'monthly_budget' not in st.session_state: st.session_state.monthly_budget = 1000000
-if 'asset_goals' not in st.session_state: st.session_state.asset_goals = {}
-if 'accounts' not in st.session_state:
-    st.session_state.accounts = {
-        "국민은행": {"type": "은행", "linked": None, "settle_day": None, "pay_day": None, "initial_balance": 0},
-        "신한카드": {"type": "신용카드", "linked": "국민은행", "settle_day": 1, "pay_day": 14, "initial_balance": 0},
-    }
-if 'current_date' not in st.session_state: st.session_state.current_date = date.today()
-if 'edit_tx_id' not in st.session_state: st.session_state.edit_tx_id = None 
+def safe_update(range_name, values):
+    try: ws.update(range_name=range_name, values=values)
+    except:
+        print("⚠️ 연결 끊김 감지! 즉시 재연결합니다 (덮어쓰기)")
+        connect_google_sheet()
+        ws.update(range_name=range_name, values=values)
 
-if not settings_df.empty and '설정구분' in settings_df.columns:
-    def get_list(col_name): return settings_df[settings_df['설정구분'] == col_name]['항목이름'].dropna().astype(str).str.strip().tolist()
+def safe_int(val, default=0):
+    try:
+        if val is None or str(val).strip() == "": return default
+        return int(str(val).replace(',', '').strip())
+    except:
+        return default
+
+HEADERS = ["trip_id", "order", "team", "date", "user", "place", "content", "items_desc", "total_amount", "details_json"]
+
+CACHE = {'data': [], 'last_update': 0}
+
+def get_all_trips(force_refresh=False):
+    global CACHE
+    current_time = time.time()
+    if not force_refresh and (current_time - CACHE['last_update'] < 2) and CACHE['data']:
+        return CACHE['data']
     
-    exp = get_list('지출분류')
-    if exp: st.session_state.exp_categories = [x for x in exp if x and x != 'nan']
-    if "개인사용" not in st.session_state.exp_categories: st.session_state.exp_categories.append("개인사용")
-    
-    inc = get_list('수입분류')
-    if inc: st.session_state.inc_categories = [x for x in inc if x and x != 'nan']
-    
-    atypes = get_list('자산종류')
-    if atypes: st.session_state.asset_types = [x for x in atypes if x and x != 'nan']
-    for req_type in ["은행", "예적금", "투자", "신용카드", "체크카드", "집계제외"]:
-        if req_type not in st.session_state.asset_types:
-            st.session_state.asset_types.append(req_type)
-    
-    budget_df = settings_df[settings_df['설정구분'] == '예산목표']
-    if not budget_df.empty:
-        try: st.session_state.monthly_budget = int(float(budget_df.iloc[0]['초기잔액']))
-        except: pass
-        
-    asset_goals_df = settings_df[settings_df['설정구분'] == '자산목표']
-    loaded_goals = {}
-    for _, row in asset_goals_df.iterrows():
-        try: loaded_goals[str(row['항목이름']).strip()] = int(float(row['초기잔액']))
-        except: pass
-    if loaded_goals: st.session_state.asset_goals = loaded_goals
-    
-    acc_df = settings_df[settings_df['설정구분'] == '계좌']
-    if not acc_df.empty:
-        loaded_accs = {}
-        for _, row in acc_df.iterrows():
-            name = str(row['항목이름']).strip()
-            if not name or name == 'nan': continue
-            def safe_int(v):
-                try: return int(float(v)) if pd.notna(v) and str(v).strip() not in ['', 'nan'] else None
-                except: return None
-            l_acc = str(row['연결계좌']).strip()
-            loaded_accs[name] = {
-                "type": str(row['계좌종류']).strip() if pd.notna(row['계좌종류']) and str(row['계좌종류']).strip() != 'nan' else "은행",
-                "linked": l_acc if l_acc and l_acc != 'nan' else None,
-                "settle_day": safe_int(row['정산일']), "pay_day": safe_int(row['결제일']), "initial_balance": safe_int(row['초기잔액']) or 0
-            }
-        if loaded_accs: st.session_state.accounts = loaded_accs
-
-target_year, target_month = st.session_state.current_date.year, st.session_state.current_date.month
-
-def calculate_historical_balances(data_df, accounts_dict):
-    if data_df.empty: return {}
-    temp_df = data_df.sort_values(by=['date', 'id'], kind='mergesort', ascending=[True, True]).copy()
-    run_bals = {acc: data.get('initial_balance', 0) for acc, data in accounts_dict.items()}
-    hist_bals = {}
-    
-    for idx, row in temp_df.iterrows():
-        r_id = str(row['id'])
-        out_bal, in_bal = None, None
-        amt = float(row['amount']) if pd.notna(row['amount']) else 0
-        
-        real_out = row['asset_out']
-        if real_out in accounts_dict and accounts_dict[real_out]['type'] == '체크카드':
-            real_out = accounts_dict[real_out].get('linked')
-            
-        real_in = row['asset_in']
-        if real_in in accounts_dict and accounts_dict[real_in]['type'] == '체크카드':
-            real_in = accounts_dict[real_in].get('linked')
-        
-        if row['type'] == '지출' and real_out in run_bals:
-            run_bals[real_out] -= amt
-            out_bal = run_bals[real_out]
-        elif row['type'] == '수입' and real_in in run_bals:
-            run_bals[real_in] += amt
-            in_bal = run_bals[real_in]
-        elif row['type'] == '이체':
-            if real_out in run_bals:
-                run_bals[real_out] -= amt
-                out_bal = run_bals[real_out]
-            if real_in in run_bals:
-                run_bals[real_in] += amt
-                in_bal = run_bals[real_in]
+    try:
+        records = safe_get_all_records()
+        valid_records = []
+        for r in records:
+            if str(r.get('trip_id', '')).strip():
+                r['order'] = safe_int(r.get('order'), 999)
+                r['total_amount'] = safe_int(r.get('total_amount'), 0)
+                r['trip_id'] = str(r.get('trip_id', '')).strip()
+                valid_records.append(r)
                 
-        hist_bals[r_id] = {'out': out_bal, 'in': in_bal}
-    return hist_bals
+        CACHE['data'] = sorted(valid_records, key=lambda x: x['order'])
+        CACHE['last_update'] = current_time
+        return CACHE['data']
+    except Exception as e:
+        print("최종 로드 에러:", e)
+        return CACHE['data']
 
-historical_balances = calculate_historical_balances(df, st.session_state.accounts)
+def is_match_team(db_team, target_team):
+    if not db_team or not target_team: return False
+    return db_team.replace('팀', '').strip() == target_team.replace('팀', '').strip()
 
-st.markdown("<h3 style='text-align:center;'>💕 우리집 가계부</h3>", unsafe_allow_html=True)
-col1, col2, col3 = st.columns([1, 2.5, 1], vertical_alignment="center")
+# ==========================================
+# 라우팅 (페이지 기능)
+# ==========================================
 
-with col1:
-    if st.button("◀", use_container_width=True, key="prev_month_btn"):
-        st.session_state.current_date = date(target_year, target_month, 1) - timedelta(days=1)
-        st.rerun()
-with col2:
-    st.markdown("<span class='month-nav-anchor'></span>", unsafe_allow_html=True)
-    with st.popover(f"📅 {target_year}년 {target_month}월", use_container_width=True):
-        p_c1, p_c2 = st.columns(2)
-        with p_c1: j_y = st.number_input("연도", 2000, 2100, target_year)
-        with p_c2: j_m = st.number_input("월", 1, 12, target_month)
-        if st.button("🚀 이동", use_container_width=True, type="primary"):
-            st.session_state.current_date = date(j_y, j_m, 1)
-            st.rerun()
-with col3:
-    if st.button("▶", use_container_width=True, key="next_month_btn"):
-        last_day = calendar.monthrange(target_year, target_month)[1]
-        st.session_state.current_date = date(target_year, target_month, last_day) + timedelta(days=1)
-        st.rerun()
-st.write("") 
-
-if not df.empty and 'date' in df.columns:
-    df['date'] = pd.to_datetime(df['date']).dt.date
-    month_df = df[(pd.to_datetime(df['date']).dt.year == target_year) & (pd.to_datetime(df['date']).dt.month == target_month)]
-    year_df = df[pd.to_datetime(df['date']).dt.year == target_year]
-else: 
-    month_df = pd.DataFrame(columns=default_columns)
-    year_df = pd.DataFrame(columns=default_columns)
-
-@st.dialog("✏️ 내역 수정 및 삭제")
-def edit_transaction_dialog(row_id):
-    global df
-    if df.empty or row_id not in df['id'].values:
-        st.error("이미 삭제되었거나 존재하지 않는 내역입니다.")
-        return
-        
-    row = df[df['id'] == row_id].iloc[0]
-    idx_type = ["지출", "수입", "이체"].index(row['type']) if row['type'] in ["지출", "수입", "이체"] else 0
-    e_type = st.radio("유형", ["지출", "수입", "이체"], horizontal=True, index=idx_type)
-    e_date = st.date_input("날짜", row['date'])
-    e_amt_str = st.text_input("금액 (계산식 가능)", value=str(row['amount']))
-    e_amt = parse_amount(e_amt_str)
-    
-    cat_list = st.session_state.exp_categories if e_type == "지출" else st.session_state.inc_categories if e_type == "수입" else ["이체"]
-    idx_cat = cat_list.index(row['category']) if row['category'] in cat_list else 0
-    e_cat = st.selectbox("분류", cat_list, index=idx_cat)
-    e_memo = st.text_input("메모", value=row['memo'])
-    
-    acc_list = ["-"] + list(st.session_state.accounts.keys())
-    e_out, e_in = "-", "-"
-    if e_type == "지출":
-        e_out = st.selectbox("결제수단", acc_list, index=acc_list.index(row['asset_out']) if row['asset_out'] in acc_list else 0)
-    elif e_type == "수입":
-        e_in = st.selectbox("입금처", acc_list, index=acc_list.index(row['asset_in']) if row['asset_in'] in acc_list else 0)
-    else:
-        e_out = st.selectbox("출금", acc_list, index=acc_list.index(row['asset_out']) if row['asset_out'] in acc_list else 0)
-        e_in = st.selectbox("입금", acc_list, index=acc_list.index(row['asset_in']) if row['asset_in'] in acc_list else 0)
-        
-    c_save, c_del = st.columns(2)
-    if c_save.button("💾 저장", use_container_width=True):
-        df.loc[df['id'] == row_id, ['date', 'type', 'amount', 'category', 'memo', 'asset_out', 'asset_in']] = [
-            e_date, e_type, e_amt, e_cat, e_memo, e_out if e_out != "-" else None, e_in if e_in != "-" else None
-        ]
-        save_data(df)
-        st.session_state.current_date = e_date 
-        st.rerun()
-    if c_del.button("🗑 삭제", type="primary", use_container_width=True):
-        df = df[df['id'] != row_id]
-        save_data(df)
-        st.rerun()
-
-@st.dialog("📝 분류 설정 수정")
-def edit_category_dialog(state_key, item_name, is_system_asset=False):
-    items = st.session_state[state_key]
-    new_item = st.text_input("새 이름", value=item_name)
-    
-    c1, c2 = st.columns(2)
-    if c1.button("💾 저장", use_container_width=True, type="primary"):
-        if new_item and new_item != item_name and new_item not in items:
-            idx = items.index(item_name)
-            items[idx] = new_item
-            
-            global df
-            if state_key == "exp_categories": df.loc[(df['type'] == '지출') & (df['category'] == item_name), 'category'] = new_item
-            elif state_key == "inc_categories": df.loc[(df['type'] == '수입') & (df['category'] == item_name), 'category'] = new_item
-            if state_key != "asset_types": save_data(df)
-            
-            save_settings()
-            st.rerun()
-        elif new_item == item_name:
-            st.rerun()
-        else:
-            st.error("중복된 이름이거나 빈 칸입니다.")
-            
-    if c2.button("🗑️ 삭제", use_container_width=True):
-        if len(items) <= 1 and not is_system_asset:
-            st.error("최소 1개는 유지해야 합니다.")
-        else:
-            items.remove(item_name)
-            save_settings()
-            st.rerun()
-
-@st.dialog("💳 자산 계좌 수정")
-def edit_account_dialog(acc_name):
-    info = st.session_state.accounts[acc_name]
-    m_name = st.text_input("자산 이름", acc_name)
-    m_type = st.selectbox("종류", st.session_state.asset_types, index=st.session_state.asset_types.index(info['type']) if info['type'] in st.session_state.asset_types else 0)
-    m_init = st.number_input("초기 잔액", value=info.get('initial_balance', 0), step=10000)
-    
-    m_link = info.get('linked')
-    m_set = info.get('settle_day') or 1
-    m_pay = info.get('pay_day') or 14
-    
-    if m_type in ["신용카드", "체크카드"]:
-        bl = [k for k, v in st.session_state.accounts.items() if v['type'] not in ['신용카드', '체크카드', '집계제외'] and k != acc_name]
-        m_link = st.selectbox("연결 계좌", ["-"] + bl, index=bl.index(m_link)+1 if m_link in bl else 0)
-    if m_type == "신용카드":
-        m_set = st.number_input("정산 기준일 (시작일)", 1, 31, m_set)
-        m_pay = st.number_input("결제 출금일", 1, 31, m_pay)
-        
-    c1, c2 = st.columns(2)
-    if c1.button("💾 저장", use_container_width=True, type="primary"):
-        new_info = {
-            'type': m_type, 'initial_balance': m_init,
-            'linked': m_link if m_type in ["신용카드", "체크카드"] and m_link != "-" else None,
-            'settle_day': m_set if m_type == "신용카드" else None,
-            'pay_day': m_pay if m_type == "신용카드" else None
-        }
-        
-        temp_dict = {}
-        for k, v in st.session_state.accounts.items():
-            if k == acc_name: temp_dict[m_name] = new_info
-            else: temp_dict[k] = v
-        st.session_state.accounts = temp_dict
-        
-        if m_name != acc_name:
-            global df
-            df.loc[df['asset_out'] == acc_name, 'asset_out'] = m_name
-            df.loc[df['asset_in'] == acc_name, 'asset_in'] = m_name
-            save_data(df)
-            
-        save_settings()
-        st.rerun()
-        
-    if c2.button("🗑️ 삭제", use_container_width=True):
-        del st.session_state.accounts[acc_name]
-        save_settings()
-        st.rerun()
-
-@st.dialog("📊 상세 내역 조회")
-def chart_detail_dialog(chart_title, cat_name, cat_amt, cat_pct, detail_df):
-    st.markdown(f"#### 🏷️ {cat_name} 상세 내역")
-    st.markdown(f"**총 {cat_amt:,.0f}원** ({cat_pct:.1f}%)")
-    st.divider()
-    
-    if detail_df.empty:
-        st.info("해당 기간에 등록된 내역이 없습니다.")
-    else:
-        for _, row in detail_df.iterrows():
-            render_transaction_item(row, f"cd_{row['id']}", show_date=True, is_readonly=True)
-
-def format_acc_with_bal(acc_name, bal):
-    if bal is None: return acc_name
-    return f"{acc_name} 💳{bal:,.0f}원"
-
-def render_transaction_item(row, prefix_key, show_date=False, is_readonly=False):
-    row_id = str(row['id'])
-    h_bals = historical_balances.get(row_id, {'out': None, 'in': None})
-    
-    if row['type'] == '지출': 
-        icon, amt_str = "🔴", f"-{row['amount']:,.0f}원"
-        acc_info = format_acc_with_bal(row['asset_out'], h_bals['out'])
-    elif row['type'] == '수입': 
-        icon, amt_str = "🔵", f"+{row['amount']:,.0f}원"
-        acc_info = format_acc_with_bal(row['asset_in'], h_bals['in'])
-    else: 
-        icon, amt_str = "🔄", f"{row['amount']:,.0f}원"
-        acc_info = f"{format_acc_with_bal(row['asset_out'], h_bals['out'])}➔{format_acc_with_bal(row['asset_in'], h_bals['in'])}"
-    
-    date_prefix = f"{pd.to_datetime(row['date']).strftime('%m.%d')} | " if show_date else ""
-    display_text = f"{date_prefix}{icon} {amt_str} ┃ {row['memo']} ({row['category']} · {acc_info})"
-    
-    if is_readonly:
-        st.markdown(f"""
-        <div style="padding: 12px 8px; border-bottom: 1px solid #f0f4f8; color: #1e293b; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-            {display_text}
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        if st.button(display_text, key=f"{prefix_key}_{row_id}", type="tertiary", use_container_width=True):
-            st.session_state.edit_tx_id = row_id
-            st.rerun()
-
-if st.session_state.edit_tx_id:
-    tx_id_to_edit = st.session_state.edit_tx_id
-    st.session_state.edit_tx_id = None 
-    edit_transaction_dialog(tx_id_to_edit)
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📒 내역", "📊 통계", "🔍 검색", "💰 자산", "⚙ 설정"])
-
-with tab1:
-    stat_month_df = month_df[month_df['category'] != '개인사용']
-    total_inc = stat_month_df[stat_month_df['type'] == '수입']['amount'].sum() if not stat_month_df.empty else 0
-    total_exp = stat_month_df[stat_month_df['type'] == '지출']['amount'].sum() if not stat_month_df.empty else 0
-    
-    custom_progress_bar(total_exp, st.session_state.monthly_budget, is_expense=True, label="🎯 이번 달 지출 예산")
-    
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("수입", f"{total_inc:,.0f} 원")
-    col_b.metric("지출", f"{total_exp:,.0f} 원")
-    col_c.metric("합계", f"{total_inc - total_exp:,.0f} 원")
-    st.caption("💡 *'개인사용' 분류는 위 통계 실적 합산에서 제외됩니다.*")
-    
-    today = date.today()
-    if target_year == today.year and target_month == today.month:
-        if today.month == 1: prev_m, prev_y = 12, today.year - 1
-        else: prev_m, prev_y = today.month - 1, today.year
-        max_days = calendar.monthrange(prev_y, prev_m)[1]
-        compare_day = min(today.day, max_days)
-        
-        prev_df = df[(pd.to_datetime(df['date']).dt.year == prev_y) & 
-                     (pd.to_datetime(df['date']).dt.month == prev_m) & 
-                     (pd.to_datetime(df['date']).dt.day <= compare_day)]
-        prev_df = prev_df[prev_df['category'] != '개인사용']
-        prev_exp = prev_df[prev_df['type'] == '지출']['amount'].sum() if not prev_df.empty else 0
-        
-        if prev_exp > 0:
-            diff = total_exp - prev_exp
-            if diff > 0: st.error(f"🚨 지난달 {compare_day}일 기준보다 **{diff:,.0f}원 더** 쓰고 있어요!")
-            elif diff < 0: st.success(f"🎉 지난달 {compare_day}일 기준보다 **{abs(diff):,.0f}원 덜** 썼어요!")
-    else:
-        if target_month == 1: prev_m, prev_y = 12, target_year - 1
-        else: prev_m, prev_y = target_month - 1, target_year
-        prev_df = df[(pd.to_datetime(df['date']).dt.year == prev_y) & (pd.to_datetime(df['date']).dt.month == prev_m)]
-        prev_df = prev_df[prev_df['category'] != '개인사용']
-        prev_exp = prev_df[prev_df['type'] == '지출']['amount'].sum() if not prev_df.empty else 0
-        
-        if prev_exp > 0:
-            diff = total_exp - prev_exp
-            if diff > 0: st.error(f"📉 전월 대비 **{diff:,.0f}원 더** 썼네요.")
-            elif diff < 0: st.success(f"📈 전월 대비 **{abs(diff):,.0f}원 덜** 썼습니다.")
-            
-    st.divider()
-
-    with st.expander("➕ 새로운 내역 등록하기", expanded=False):
-        tx_type = st.radio("유형", ["지출", "수입", "이체"], horizontal=True)
-        tx_date = st.date_input("날짜", st.session_state.current_date)
-        tx_amt_str = st.text_input("금액 (계산식 가능)", value="")
-        tx_amt = parse_amount(tx_amt_str)
-        if tx_amt_str: st.caption(f"↳ 계산 금액: **{tx_amt:,.0f} 원**")
-        
-        tx_cat = st.selectbox("분류", st.session_state.exp_categories if tx_type == "지출" else st.session_state.inc_categories if tx_type == "수입" else ["이체"])
-        tx_memo = st.text_input("메모")
-        
-        acc_out, acc_in = "-", "-"
-        if tx_type == "지출": acc_out = st.selectbox("결제수단", ["-"] + list(st.session_state.accounts.keys()))
-        elif tx_type == "수입": acc_in = st.selectbox("입금처", ["-"] + list(st.session_state.accounts.keys()))
-        else:
-            c1, c2 = st.columns(2)
-            with c1: acc_out = st.selectbox("출금", ["-"] + list(st.session_state.accounts.keys()))
-            with c2: acc_in = st.selectbox("입금", ["-"] + list(st.session_state.accounts.keys()))
-            
-        if st.button("등록 완료", use_container_width=True, type="primary"):
-            if tx_amt <= 0: st.error("금액을 정확히 입력하세요.")
-            else:
-                new_row = {"id": str(uuid.uuid4()), "date": tx_date, "type": tx_type, "amount": tx_amt, 
-                           "asset_out": acc_out if acc_out != "-" else None, "asset_in": acc_in if acc_in != "-" else None, 
-                           "category": tx_cat, "memo": tx_memo}
-                updated_df = pd.DataFrame([new_row]) if df.empty else pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_data(updated_df)
-                st.session_state.current_date = tx_date
-                st.rerun()
-
-    if not month_df.empty:
-        sorted_dates = sorted(month_df['date'].unique(), reverse=True)
-        days_kr = ["월", "화", "수", "목", "금", "토", "일"]
-        
-        for d in sorted_dates:
-            group = month_df[month_df['date'] == d].sort_values(by=['date', 'id'], ascending=[False, False])
-            day_idx = pd.to_datetime(d).weekday()
-            
-            day_inc = group[group['type'] == '수입']['amount'].sum()
-            day_exp = group[group['type'] == '지출']['amount'].sum()
-            
-            st.markdown(f"""
-            <div style='margin-top:15px; margin-bottom:5px; padding:6px 10px; background-color: #f1f5f9; border-radius: 6px; border-left: 4px solid #3b82f6;'>
-                <b style='color:#0f172a; font-size: 15px;'>{d.day}일 ({days_kr[day_idx]})</b> 
-                <span style='font-size:13px; color:#475569; float:right; font-weight:bold;'>수 {day_inc:,.0f} | 지 <span style='color:#dc2626'>{day_exp:,.0f}</span></span>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            for _, row in group.iterrows():
-                render_transaction_item(row, "t1", show_date=False)
-    else: st.info("이번 달 내역이 없습니다.")
-
-with tab2:
-    period_m, period_y = st.tabs([f"📅 {target_month}월", f"🗓️ {target_year}년"])
-    
-    def render_chart_with_details(df_sub, group_col, chart_title, prefix_key, color_theme):
-        if df_sub.empty or 'category' not in df_sub.columns:
-            st.info("해당 내역이 없습니다. (개인사용 제외)")
-            return
-
-        df_sub = df_sub[df_sub['category'] != '개인사용']
-        
-        if df_sub.empty:
-            st.info("해당 내역이 없습니다. (개인사용 제외)")
-            return
-
-        sum_df = df_sub.groupby(group_col)['amount'].sum().reset_index().sort_values(by='amount', ascending=False)
-        total_amt = sum_df['amount'].sum()
-        
-        sum_df['root'] = f"총액<br>{total_amt:,.0f}원"
-        
-        fig = px.sunburst(
-            sum_df, 
-            path=['root', group_col], 
-            values='amount',
-            color=group_col,
-            color_discrete_sequence=color_theme
-        )
-        
-        fig.update_traces(
-            texttemplate='<b>%{label}</b><br>%{value:,.0f}원', 
-            textfont=dict(color='black', size=14), 
-            insidetextfont=dict(color='black'), 
-            hovertemplate='<b>%{label}</b><br>%{value:,.0f}원<extra></extra>',
-            marker=dict(line=dict(color='#ffffff', width=2)),
-            insidetextorientation='auto' 
-        )
-        
-        fig.update_layout(
-            margin=dict(t=10, b=10, l=10, r=10),
-            showlegend=False,
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            clickmode='event+select'
-        )
-        
-        st.markdown(f"<div style='margin-bottom: 5px; font-size:14px; font-weight:bold; color:#3b82f6; text-align:center;'>👇 차트 조각을 터치하면 상세 내역이 열립니다!</div>", unsafe_allow_html=True)
-
-        click_state_key = f"last_clicked_{prefix_key}"
-        if click_state_key not in st.session_state:
-            st.session_state[click_state_key] = None
-
-        chart_selection = st.plotly_chart(
-            fig, 
-            use_container_width=True, 
-            key=f"chart_{prefix_key}",
-            on_select="rerun" 
-        )
-
-        if chart_selection and "selection" in chart_selection:
-            points = chart_selection["selection"].get("points", [])
-            if points:
-                pt = points[0]
-                selected_cat = pt.get("label")
-                
-                if selected_cat and "총액" not in selected_cat and selected_cat in sum_df[group_col].values:
-                    if st.session_state[click_state_key] != selected_cat:
-                        st.session_state[click_state_key] = selected_cat
-                        
-                        cat_amt = sum_df[sum_df[group_col] == selected_cat]['amount'].sum()
-                        cat_pct = (cat_amt / total_amt) * 100
-                        detail_df = df_sub[df_sub[group_col] == selected_cat].sort_values(by=['date', 'id'], ascending=[False, False])
-                        
-                        chart_detail_dialog(chart_title, selected_cat, cat_amt, cat_pct, detail_df)
-            else:
-                st.session_state[click_state_key] = None
-
-    def render_stats(data_df, period_key):
-        exp_df = data_df[data_df['type'] == '지출'] if not data_df.empty else pd.DataFrame(columns=default_columns)
-        inc_df = data_df[data_df['type'] == '수입'] if not data_df.empty else pd.DataFrame(columns=default_columns)
-
-        stat_t1, stat_t2, stat_t3 = st.tabs(["지출 (분류별)", "지출 (결제수단별)", "수입 (분류별)"])
-        
-        with stat_t1: render_chart_with_details(exp_df, 'category', "지출 분류", f"{period_key}_exp_cat", px.colors.qualitative.Pastel)
-        with stat_t2: render_chart_with_details(exp_df, 'asset_out', "결제 수단", f"{period_key}_exp_acc", px.colors.qualitative.Set3)
-        with stat_t3: render_chart_with_details(inc_df, 'category', "수입 분류", f"{period_key}_inc_cat", px.colors.qualitative.Set2)
-
-    with period_m: render_stats(month_df, "month")
-    with period_y: render_stats(year_df, "year")
-
-with tab3:
-    st.subheader("🔍 내역 통합 검색")
-    sq = st.text_input("검색어 (메모, 분류, 금액, 결제수단)", placeholder="예: 마트, 15000, 국민은행")
-    
-    if sq and not df.empty:
-        sq_low = sq.lower()
-        s_df = df[
-            df['memo'].astype(str).str.lower().str.contains(sq_low) |
-            df['category'].astype(str).str.lower().str.contains(sq_low) |
-            df['amount'].astype(str).str.contains(sq_low) |
-            df['asset_out'].astype(str).str.lower().str.contains(sq_low) |
-            df['asset_in'].astype(str).str.lower().str.contains(sq_low)
-        ]
-        
-        st.markdown(f"**총 {len(s_df)}건의 검색 결과가 있습니다.**")
-        if not s_df.empty:
-            s_df = s_df.sort_values(by=["date", "id"], ascending=[False, False])
-            for _, row in s_df.iterrows():
-                render_transaction_item(row, "s", show_date=True)
-    elif sq: st.info("검색 결과가 없습니다.")
-
-with tab4:
-    balances = {acc: data.get('initial_balance', 0) for acc, data in st.session_state.accounts.items()}
-    if not df.empty:
-        for _, row in df.iterrows():
-            amt = float(row['amount']) if pd.notna(row['amount']) else 0
-            r_out, r_in = row['asset_out'], row['asset_in']
-            if r_out in st.session_state.accounts and st.session_state.accounts[r_out]['type'] == '체크카드':
-                r_out = st.session_state.accounts[r_out].get('linked')
-            if r_in in st.session_state.accounts and st.session_state.accounts[r_in]['type'] == '체크카드':
-                r_in = st.session_state.accounts[r_in].get('linked')
-                
-            if row['type'] == '지출' and r_out in balances: balances[r_out] -= amt
-            elif row['type'] == '수입' and r_in in balances: balances[r_in] += amt
-            elif row['type'] == '이체':
-                if r_out in balances: balances[r_out] -= amt
-                if r_in in balances: balances[r_in] += amt
-
-    total_assets = sum(bal for acc, bal in balances.items() if acc in st.session_state.accounts and st.session_state.accounts[acc]['type'] in ['은행', '예적금', '투자'])
-    
-    st.markdown(f"""
-    <div style='background: linear-gradient(135deg, #4f46e5, #3b82f6); padding:20px; border-radius:12px; text-align:center; margin-top:10px; margin-bottom:25px; color:white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
-        <h4 style='margin:0; font-size:15px; font-weight:normal; opacity:0.9;'>💎 총 자산 (입출금 + 저축성)</h4>
-        <h1 style='margin:10px 0 0 0; font-size:32px;'>{total_assets:,.0f} 원</h1>
+@app.route('/')
+def login_page():
+    if 'username' in session: return redirect(url_for('index'))
+    html = """
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>경비 정산 로그인</title>
+    <style>
+        body { font-family: '맑은 고딕', sans-serif; background: #f0f4f8; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; width: 300px; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #1e3a8a; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 15px; }
+    </style>
+    </head><body>
+    <div class="login-box">
+        <h2 style="color:#1e3a8a; margin-bottom:20px;">경비 정산 시스템</h2>
+        <form action="/login" method="post">
+            <input type="text" name="username" placeholder="아이디 (예: admin, 시운전)" required>
+            <input type="password" name="password" placeholder="비밀번호" required>
+            <button type="submit">로그인</button>
+        </form>
     </div>
-    """, unsafe_allow_html=True)
+    </body></html>
+    """
+    return html
 
-    banks = {acc: bal for acc, bal in balances.items() if acc in st.session_state.accounts and st.session_state.accounts[acc]['type'] == '은행'}
-    if banks:
-        st.markdown("#### 🏦 입출금 자산 (은행)")
-        for acc, bal in banks.items():
-            st.markdown(f"""
-            <div style="margin-bottom: 10px; padding: 15px; background-color: white; border-radius: 10px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 15px; font-weight: bold; color: #1e293b;">🏦 {acc}</span>
-                <span style="font-size: 16px; font-weight: bold; color: #0f172a;">{bal:,.0f} 원</span>
-            </div>
-            """, unsafe_allow_html=True)
-            
-    savings = {acc: bal for acc, bal in balances.items() if acc in st.session_state.accounts and st.session_state.accounts[acc]['type'] in ['예적금', '투자']}
-    if savings:
-        st.markdown("<h4 style='margin-top:20px;'>🌱 저축성 자산 (예적금/투자)</h4>", unsafe_allow_html=True)
-        for acc, bal in savings.items():
-            goal = st.session_state.asset_goals.get(acc, 0)
-            icon = "🌱" if st.session_state.accounts[acc]['type'] == '예적금' else "📈"
-            if goal > 0:
-                custom_progress_bar(bal, goal, is_expense=False, label=f"{icon} {acc} 목표")
-            else:
-                st.markdown(f"""
-                <div style="margin-bottom: 10px; padding: 15px; background-color: white; border-radius: 10px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 15px; font-weight: bold; color: #1e293b;">{icon} {acc}</span>
-                    <span style="font-size: 16px; font-weight: bold; color: #0f172a;">{bal:,.0f} 원</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
-    cc_accounts = {k: v for k, v in st.session_state.accounts.items() if v['type'] == '신용카드'}
-    if cc_accounts:
-        st.markdown("<h4 style='margin-top:20px;'>💳 신용카드 결제 예정금</h4>", unsafe_allow_html=True)
-        for acc, conf in cc_accounts.items():
-            linked_acc = conf.get('linked')
-            settle_day = conf.get('settle_day') or 1
-            
-            if target_month == 1: prev_m, prev_y = 12, target_year - 1
-            else: prev_m, prev_y = target_month - 1, target_year
-                
-            _, prev_last_day = calendar.monthrange(prev_y, prev_m)
-            actual_s_day = min(settle_day, prev_last_day)
-            def_start = date(prev_y, prev_m, actual_s_day)
-            
-            if settle_day == 1:
-                _, last_day = calendar.monthrange(prev_y, prev_m)
-                def_end = date(prev_y, prev_m, last_day)
-            else:
-                _, curr_last_day = calendar.monthrange(target_year, target_month)
-                actual_e_day = min(settle_day - 1, curr_last_day)
-                def_end = date(target_year, target_month, max(1, actual_e_day))
-            
-            with st.container(border=True):
-                st.markdown(f"<div style='font-size:15px; font-weight:bold; color:#1e293b; margin-bottom:10px;'>💳 {acc} <span style='font-size:13px; color:#64748b; font-weight:normal;'>(연결: {linked_acc if linked_acc and linked_acc != '-' else '없음'})</span></div>", unsafe_allow_html=True)
-                
-                c1, c2 = st.columns(2)
-                with c1: dr = st.date_input("이용 기간", value=(def_start, def_end), key=f"dr_{acc}_{target_year}_{target_month}")
-                with c2: pd_date = st.date_input("결제(출금)일", value=date(target_year, target_month, conf.get('pay_day') or 14), key=f"pd_{acc}_{target_year}_{target_month}")
-                    
-                bill_amt = 0
-                memo_text = ""
-                already_paid = False
-                
-                if isinstance(dr, tuple) and len(dr) == 2:
-                    s_dt, e_dt = dr
-                    memo_text = f"{acc} 대금 정산 ({s_dt.strftime('%m.%d')}~{e_dt.strftime('%m.%d')})"
-                    
-                    if not df.empty:
-                        temp_dates = pd.to_datetime(df['date']).dt.date
-                        mask = (temp_dates >= s_dt) & (temp_dates <= e_dt)
-                        df_period = df[mask]
-                        exp = df_period[(df_period['asset_out'] == acc) & (df_period['type'] == '지출')]['amount'].sum()
-                        ref = df_period[(df_period['asset_in'] == acc) & (df_period['type'] == '수입')]['amount'].sum()
-                        bill_amt = exp - ref
-                        
-                        paid_df = df[(df['type'] == '이체') & (df['asset_in'] == acc) & (df['memo'] == memo_text)]
-                        if not paid_df.empty:
-                            already_paid = True
+@app.route('/login', methods=['POST'])
+def do_login():
+    uid = request.form.get('username')
+    upass = request.form.get('password')
+    if uid in USER_CREDENTIALS and USER_CREDENTIALS[uid]['password'] == upass:
+        session['user_id'] = uid
+        session['username'] = USER_CREDENTIALS[uid]['name']
+        session['team'] = USER_CREDENTIALS[uid]['team']
+        return redirect(url_for('index'))
+    return "<script>alert('아이디 또는 비밀번호가 올바르지 않습니다.'); history.back();</script>"
 
-                c_info, c_btn = st.columns([7, 3], vertical_alignment="center")
-                with c_info:
-                    if already_paid: st.success(f"✅ 결제 완료 ({bill_amt:,.0f}원)")
-                    elif bill_amt > 0: st.info(f"결제 예정액 : **{bill_amt:,.0f} 원**")
-                    elif bill_amt < 0: st.success(f"환불 초과 (-{-bill_amt:,.0f} 원)")
-                    else: st.success("결제 대금이 없습니다. ✅")
-                        
-                with c_btn:
-                    if bill_amt > 0 and not already_paid:
-                        if not linked_acc or linked_acc == "-": st.caption("연결계좌 없음")
-                        else:
-                            if st.button("💳 결제", key=f"pay_{acc}_{target_year}_{target_month}", use_container_width=True, type="primary"):
-                                if linked_acc in balances and balances[linked_acc] < bill_amt:
-                                    st.error(f"연결 계좌 잔액 부족!")
-                                else:
-                                    new_row = {
-                                        "id": str(uuid.uuid4()), "date": pd_date, "type": "이체", 
-                                        "amount": int(bill_amt), "asset_out": linked_acc, "asset_in": acc, 
-                                        "category": "이체", "memo": memo_text
-                                    }
-                                    updated_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True) if not df.empty else pd.DataFrame([new_row])
-                                    save_data(updated_df)
-                                    st.session_state.current_date = pd_date
-                                    st.rerun()
-
-    excluded_accs = {acc: bal for acc, bal in balances.items() if acc in st.session_state.accounts and st.session_state.accounts[acc]['type'] == '집계제외'}
-    if excluded_accs:
-        st.markdown("<h4 style='margin-top:20px;'>👻 예외 자산 (집계 제외)</h4>", unsafe_allow_html=True)
-        for acc, bal in excluded_accs.items():
-            st.markdown(f"""
-            <div style="margin-bottom: 10px; padding: 15px; background-color: #f8fafc; border-radius: 10px; border: 1px dashed #cbd5e1; display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 15px; font-weight: bold; color: #64748b;">👻 {acc}</span>
-                <span style="font-size: 16px; font-weight: bold; color: #64748b;">{bal:,.0f} 원</span>
-            </div>
-            """, unsafe_allow_html=True)
-
-with tab5:
-    st.subheader("⚙ 가계부 설정")
+@app.route('/index')
+def index():
+    if 'username' not in session: return redirect(url_for('login_page'))
+    username = session.get('username', '게스트')
+    team = session.get('team', '시운전팀')
     
-    with st.expander("🎯 예산 및 자산 목표 설정", expanded=False):
-        st.write("이번 달 예산과 저축 목표를 설정하면 게이지 바가 나타납니다.")
-        new_budget = st.number_input("이번 달 총 지출 예산", value=st.session_state.monthly_budget, step=100000)
-        
-        st.write("##### 🌱 예적금/투자 모으기 목표")
-        new_asset_goals = {}
-        has_savings = any(info['type'] in ['예적금', '투자'] for info in st.session_state.accounts.values())
-        
-        for acc_name, info in st.session_state.accounts.items():
-            if info['type'] in ["예적금", "투자"]: 
-                val = st.session_state.asset_goals.get(acc_name, 0)
-                new_val = st.number_input(f"[{acc_name}] 목표액 (0은 미설정)", value=val, step=1000000)
-                if new_val > 0: new_asset_goals[acc_name] = new_val
-        
-        if not has_savings:
-            st.warning("등록된 '예적금' 또는 '투자' 자산이 없습니다. 먼저 하단의 자산 목록에서 추가해주세요.")
-                
-        if st.button("목표 저장하기", type="primary", use_container_width=True):
-            st.session_state.monthly_budget = new_budget
-            st.session_state.asset_goals = new_asset_goals
-            save_settings()
-            st.rerun()
-
-    def render_inline_list(items, title, state_key, is_system=False):
-        with st.expander(f"📝 {title}", expanded=False):
-            if not items: st.caption("등록된 항목이 없습니다.")
+    current_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
+    month_start_date = f"{current_month}-01"
+    month_end_date = f"{current_month}-31"
+    
+    ALL_TRIPS = get_all_trips()
+    
+    # 🌟 목록 표에 보여줄 이번 달 데이터만 자르기
+    filtered_trips = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(current_month)]
+    
+    def custom_sort(t):
+        t_team = str(t.get('team', '')).strip()
+        t_date = str(t.get('date', ''))
+        t_user = str(t.get('user', ''))
+        t_order = safe_int(t.get('order'), 999)
+        if t_team == '시운전팀': return (0, t_user, t_date, t_order)
+        else: return (1, t_date, t_order, t_user)
             
-            for i in range(len(items)):
-                item = items[i]
-                c_btn, c_up, c_dn = st.columns([7, 1.5, 1.5], vertical_alignment="center")
+    filtered_trips.sort(key=custom_sort)
+    
+    raw_stats_list = []
+    dashboard_stats = {'총합': 0}
+    for t_name in TEAMS_LIST:
+        dashboard_stats[t_name] = 0
+    
+    # 🚨 가장 중요한 핵심: 그래프를 위해 1년 치가 담겨있는 ALL_TRIPS를 돌려야 합니다!
+    for t in ALL_TRIPS:
+        try: details = json.loads(t.get('details_json', '[]'))
+        except: details = []
+        
+        is_current_month = str(t.get('date', '')).startswith(current_month)
+        
+        for item in details:
+            # 1. 1년 치 전체 데이터를 무조건 추가 (12개월 그래프용)
+            stat_item = {
+                "date": t.get('date', ''), "team": t.get('team', ''),
+                "place": t.get('place', ''), "user": t.get('user', '알수없음'), 
+                "category": item.get('category', '기타'), "amount": safe_int(item.get('amount'), 0)
+            }
+            raw_stats_list.append(stat_item)
+            
+            # 2. 상단 비용 합계 네모 박스는 이번 달(is_current_month) 데이터만 합산
+            if is_current_month:
+                amt = safe_int(item.get('amount'), 0)
+                dashboard_stats['총합'] += amt
                 
-                with c_btn:
-                    st.markdown("<div class='settings-btn'>", unsafe_allow_html=True)
-                    if is_system and item in ["신용카드", "체크카드", "은행", "예적금", "투자", "집계제외"]:
-                        st.button(f"🔒 {item}", key=f"btn_{title}_{item}", type="tertiary", use_container_width=True, disabled=True)
-                    else:
-                        if st.button(f"• {item}", key=f"btn_{title}_{item}", type="tertiary", use_container_width=True):
-                            edit_category_dialog(state_key, item, is_system)
-                    st.markdown("</div>", unsafe_allow_html=True)
+                raw_team = str(t.get('team', '')).strip()
+                std_team = raw_team
+                if std_team not in TEAMS_LIST:
+                    if std_team + '팀' in TEAMS_LIST: std_team += '팀'
+                if std_team in dashboard_stats: dashboard_stats[std_team] += amt
+
+    return render_template('index.html', username=username, team=team, current_month=current_month,
+        month_start_date=month_start_date, month_end_date=month_end_date, trips=filtered_trips,
+        categories=CATEGORIES, dashboard_stats=dashboard_stats, raw_stats_json=json.dumps(raw_stats_list, ensure_ascii=False),
+        teams=TEAMS_LIST)
+
+@app.route('/expense/add', methods=['POST'])
+def add_expense():
+    expense_date = request.form.get('expense_date') 
+    user_name = request.form.get('user_name')       
+    place = request.form.get('place')
+    content = request.form.get('content')
+    search_month = request.form.get('search_month', datetime.now().strftime('%Y-%m'))
+    
+    user_team = session.get('team', TEAMS_LIST[0])
+    if user_team == "관리자" and request.form.get('target_team'):
+        user_team = request.form.get('target_team')
+        
+    receipt_cats = request.form.getlist('receipt_category')
+    receipt_amts = request.form.getlist('receipt_amount')
+    
+    details, total_amount, desc_parts = [], 0, []
+    for i in range(len(receipt_cats)):
+        cat = receipt_cats[i]
+        amt = safe_int(receipt_amts[i] if i < len(receipt_amts) else 0)
+        if cat and amt > 0:
+            details.append({"id": f"r_{uuid.uuid4().hex[:6]}", "category": cat, "amount": amt})
+            total_amount += amt
+            desc_parts.append(f"{cat}: {amt:,}원")
+            
+    items_desc = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
+    
+    new_trip = {
+        "trip_id": str(uuid.uuid4().hex[:8]), "order": 999,
+        "team": user_team, "date": expense_date, "user": user_name,
+        "place": place, "content": content, "items_desc": items_desc,
+        "total_amount": total_amount, "details_json": json.dumps(details, ensure_ascii=False)
+    }
+    
+    try:
+        new_row = [str(new_trip.get(h, "")) for h in HEADERS]
+        safe_append_row(new_row)
+        get_all_trips(force_refresh=True)
+    except Exception as e:
+        print("데이터 저장 실패:", e)
+        return f"<script>alert('서버 저장 중 통신 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        
+    return redirect(url_for('index', search_month=search_month))
+
+@app.route('/expense/edit_submit', methods=['POST'])
+def edit_submit():
+    trip_id = request.form.get('trip_id')
+    search_month = request.form.get('search_month')
+    sub_ids = request.form.getlist('sub_receipt_ids')
+    sub_categories = request.form.getlist('sub_receipt_categories')
+    sub_amounts = request.form.getlist('sub_receipt_amounts')
+    
+    try:
+        records = safe_get_all_records()
+        valid_records = []
+        for r in records:
+            if str(r.get('trip_id', '')).strip() == str(trip_id):
+                t = r
+                t['date'] = request.form.get('date')
+                t['user'] = request.form.get('user')
+                t['place'] = request.form.get('place')
+                t['content'] = request.form.get('content')
+                
+                new_details, total_amount, desc_parts = [], 0, []
+                for j in range(len(sub_ids)):
+                    amt = safe_int(sub_amounts[j] if j < len(sub_amounts) else 0)
+                    cat = sub_categories[j]
+                    if cat and amt > 0:
+                        new_details.append({"id": sub_ids[j], "category": cat, "amount": amt})
+                        total_amount += amt
+                        desc_parts.append(f"{cat}: {amt:,}원")
+                        
+                t['total_amount'] = total_amount
+                t['items_desc'] = " | ".join(desc_parts) if desc_parts else "등록된 영수증 없음"
+                t['details_json'] = json.dumps(new_details, ensure_ascii=False)
+                valid_records.append(t)
+            elif str(r.get('trip_id', '')).strip():
+                valid_records.append(r)
+                
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        safe_update("A1", values)
+        get_all_trips(force_refresh=True)
+    except Exception as e:
+        print("데이터 수정 실패:", e)
+        return f"<script>alert('서버 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); history.back();</script>"
+        
+    return redirect(url_for('index', search_month=search_month))
+
+@app.route('/expense/reorder', methods=['POST'])
+def reorder():
+    trip_ids = request.form.getlist('trip_ids')
+    search_month = request.form.get('search_month')
+    try:
+        records = safe_get_all_records()
+        valid_records = [r for r in records if str(r.get('trip_id', '')).strip()]
+        for r in valid_records: r['order'] = safe_int(r.get('order'), 999)
+        for index, tid in enumerate(trip_ids):
+            for r in valid_records:
+                if str(r.get('trip_id')) == str(tid):
+                    r['order'] = index + 1
+                    break
                     
-                with c_up:
-                    if i > 0 and st.button("🔼", key=f"up_{state_key}_{item}", use_container_width=True):
-                        items[i-1], items[i] = items[i], items[i-1]
-                        save_settings()
-                        st.rerun()
-                with c_dn:
-                    if i < len(items) - 1 and st.button("🔽", key=f"dn_{state_key}_{item}", use_container_width=True):
-                        items[i+1], items[i] = items[i], items[i+1]
-                        save_settings()
-                        st.rerun()
-            
-            st.divider()
-            c_new, c_add = st.columns([7, 3])
-            new_item = c_new.text_input("새 항목 이름", key=f"new_{title}", placeholder="항목 입력", label_visibility="collapsed")
-            if c_add.button("추가", key=f"add_{title}", use_container_width=True):
-                if new_item and new_item not in items:
-                    items.append(new_item)
-                    save_settings()
-                    st.rerun()
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        safe_update("A1", values)
+        get_all_trips(force_refresh=True)
+    except Exception as e:
+        print("순번 정렬 실패:", e)
+    return redirect(url_for('index', search_month=search_month))
 
-    render_inline_list(st.session_state.exp_categories, "지출 분류 관리", "exp_categories")
-    render_inline_list(st.session_state.inc_categories, "수입 분류 관리", "inc_categories")
-    render_inline_list(st.session_state.asset_types, "자산 종류 관리", "asset_types", is_system=True)
-
-    with st.expander("💳 자산(계좌/카드) 목록 및 순서 관리", expanded=False):
-        acc_keys = list(st.session_state.accounts.items())
+@app.route('/expense/delete/<trip_id>')
+def delete_expense(trip_id):
+    search_month = request.args.get('search_month', datetime.now().strftime('%Y-%m'))
+    try:
+        records = safe_get_all_records()
+        valid_records = [r for r in records if str(r.get('trip_id', '')).strip() and str(r.get('trip_id', '')) != str(trip_id)]
         
-        for i, (acc_name, info) in enumerate(acc_keys):
-            c_btn, c_up, c_dn = st.columns([7, 1.5, 1.5], vertical_alignment="center")
-            with c_btn:
-                st.markdown("<div class='settings-btn'>", unsafe_allow_html=True)
-                if st.button(f"💳 {acc_name} ({info['type']})", key=f"btn_acc_{acc_name}", type="tertiary", use_container_width=True):
-                    edit_account_dialog(acc_name)
-                st.markdown("</div>", unsafe_allow_html=True)
-            
-            with c_up:
-                if i > 0 and st.button("🔼", key=f"up_{acc_name}", use_container_width=True):
-                    acc_keys[i-1], acc_keys[i] = acc_keys[i], acc_keys[i-1]
-                    st.session_state.accounts = dict(acc_keys)
-                    save_settings()
-                    st.rerun()
-            with c_dn:
-                if i < len(acc_keys)-1 and st.button("🔽", key=f"dn_{acc_name}", use_container_width=True):
-                    acc_keys[i+1], acc_keys[i] = acc_keys[i], acc_keys[i+1]
-                    st.session_state.accounts = dict(acc_keys)
-                    save_settings()
-                    st.rerun()
+        values = [HEADERS] + [[str(t.get(h, "")) for h in HEADERS] for t in valid_records]
+        empty_row = [""] * len(HEADERS)
+        values.extend([empty_row] * 30)
+        safe_update("A1", values)
+        get_all_trips(force_refresh=True)
+    except Exception as e:
+        print("데이터 삭제 실패:", e)
+    return redirect(url_for('index', search_month=search_month))
 
-        st.divider()
-        st.write("##### ➕ 새로운 자산 등록")
-        n_acc_name = st.text_input("새 계좌/카드 이름", key="na_name")
-        n_acc_type = st.selectbox("종류 선택", st.session_state.asset_types, key="na_type")
-        n_init = st.number_input("초기 잔액", value=0, step=10000, key="na_init")
-        n_linked, n_settle, n_pay = None, None, None
+@app.route('/download/cover')
+def download_cover():
+    try:
+        target_team = request.args.get('team', 'ALL')
+        target_month = request.args.get('month', datetime.now().strftime('%Y-%m'))
+        ALL_TRIPS = get_all_trips()
         
-        if n_acc_type in ["신용카드", "체크카드"]:
-            bl = [k for k, v in st.session_state.accounts.items() if v['type'] not in ['신용카드', '체크카드', '집계제외']]
-            n_linked = st.selectbox("연결 계좌", ["-"] + bl, key="na_link")
-        if n_acc_type == "신용카드":
-            n_settle = st.number_input("정산 기준일 (매월 시작일)", 1, 31, 1, key="na_set")
-            n_pay = st.number_input("결제 출금일", 1, 31, 14, key="na_pay")
-            
-        if st.button("자산 등록", key="na_btn", use_container_width=True, type="primary"):
-            if n_acc_name and n_acc_name not in st.session_state.accounts:
-                st.session_state.accounts[n_acc_name] = {
-                    "type": n_acc_type, "linked": n_linked if n_linked != "-" else None,
-                    "settle_day": n_settle, "pay_day": n_pay, "initial_balance": n_init
-                }
-                save_settings()
-                st.rerun()
+        if target_team == 'ALL':
+            raw_data = [t for t in ALL_TRIPS if str(t.get('date', '')).startswith(target_month)]
+            display_team_title = "전사 통합"
+        else:
+            raw_data = [t for t in ALL_TRIPS if is_match_team(str(t.get('team', '')), target_team) and str(t.get('date', '')).startswith(target_month)]
+            display_team_title = target_team
 
-if not use_gsheets:
-    st.error(f"🚨 구글 시트 연동 오류: {gsheets_error_msg}")
-    if "429" in gsheets_error_msg or "Quota exceeded" in gsheets_error_msg:
-        st.warning("💡 **구글 시트 1분당 호출 제한(60회)에 도달했습니다.**\n\n이전의 과도한 새로고침이나 잦은 접속으로 인해 구글 측에서 일시적으로 앱을 1분간 차단한 상태입니다. 구글의 제한은 매 분 리셋되므로, **조금만 기다리신 후 아래 버튼을 눌러주세요!**")
-        if st.button("🔄 다시 시도하기 (1분 뒤 클릭)", use_container_width=True, type="primary"):
-            fetch_gsheets_data.clear()
-            st.rerun()
+        def custom_sort(t):
+            t_team = str(t.get('team', '')).strip()
+            t_date = str(t.get('date', ''))
+            t_user = str(t.get('user', ''))
+            t_order = safe_int(t.get('order'), 999)
+            if t_team == '시운전팀': return (0, t_user, t_date, t_order)
+            else: return (1, t_date, t_order, t_user)
+            
+        raw_data.sort(key=custom_sort)
+        
+        wb = openpyxl.Workbook()
+        
+        font_title = Font(name='맑은 고딕', size=18, bold=True, color='000080')
+        font_header = Font(name='맑은 고딕', size=11, bold=True)
+        font_main = Font(name='맑은 고딕', size=10)
+        font_sum = Font(name='맑은 고딕', size=11, bold=True)
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        fill_sum = PatternFill(start_color='E6F0FF', end_color='E6F0FF', fill_type='solid')
+        align_center = Alignment(horizontal='center', vertical='center', shrink_to_fit=True)
+        align_right = Alignment(horizontal='right', vertical='center', shrink_to_fit=True)
+        align_left = Alignment(horizontal='left', vertical='center', shrink_to_fit=True)
+
+        ws1 = wb.active
+        ws1.title = f"{target_month[5:7]}월 정산서"
+        
+        ws1.page_setup.fitToPage = True
+        ws1.page_setup.fitToWidth = 1
+        ws1.page_setup.fitToHeight = 0
+        ws1.page_margins.left = 0.25
+        ws1.page_margins.right = 0.25
+
+        ws1.merge_cells('A1:E2')
+        ws1['A1'] = f"{target_month[5:7]}월 경비 사용내역서"
+        ws1['A1'].font = font_title
+        ws1['A1'].alignment = align_left
+
+        display_categories = ["교통비", "식비", "숙박비", "소모품비", "차량유지비", "기타"]
+        headers1 = ["순번", "일자", "내 용", "출장지", "금액(합계)"] + display_categories + ["사용자"]
+
+        approve_headers = ["작성", "검토", "검토", "승인"]
+        for i, h in enumerate(approve_headers):
+            col_idx = 9 + i 
+            cell = ws1.cell(row=1, column=col_idx, value=h)
+            cell.font = font_main; cell.alignment = align_center; cell.border = thin_border
+            ws1.merge_cells(start_row=2, start_column=col_idx, end_row=3, end_column=col_idx)
+            for r in range(2, 4): ws1.cell(row=r, column=col_idx).border = thin_border
+            
+        ws1.row_dimensions[1].height = 20
+        ws1.row_dimensions[2].height = 20
+        ws1.row_dimensions[3].height = 20
+
+        ws1.merge_cells('A4:E4')
+        ws1['A4'] = f"작성일자: {datetime.now().strftime('%Y년 %m월 %d일')}  /  부서: {display_team_title}"
+        ws1['A4'].font = font_main
+        ws1.row_dimensions[4].height = 20
+
+        for col_idx, h in enumerate(headers1, 1):
+            cell = ws1.cell(row=5, column=col_idx, value=h)
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
+        ws1.row_dimensions[5].height = 25
+
+        r_idx = 6
+        for idx, trip in enumerate(raw_data, 1):
+            ws1.cell(row=r_idx, column=1, value=idx).alignment = align_center
+            
+            raw_date = str(trip.get('date', ''))
+            ws1.cell(row=r_idx, column=2, value=raw_date[-2:] if len(raw_date)>=10 else raw_date).alignment = align_center
+            
+            display_content = f"[{trip['team']}] {trip['content']}" if target_team == 'ALL' else trip.get('content', '')
+            ws1.cell(row=r_idx, column=3, value=display_content).alignment = align_left
+            ws1.cell(row=r_idx, column=4, value=trip.get('place', '')).alignment = align_center
+            
+            t_cell = ws1.cell(row=r_idx, column=5, value=safe_int(trip.get('total_amount', 0)))
+            t_cell.font = Font(name='맑은 고딕', size=10, bold=True); t_cell.number_format = '#,##0'; t_cell.alignment = align_right
+            
+            cat_sums = {c: 0 for c in display_categories}
+            try:
+                details = json.loads(trip.get('details_json', '[]'))
+                for item in details:
+                    c_name = item.get('category', '기타')
+                    amt = safe_int(item.get('amount', 0))
+                    if c_name in ['교통비', '주차비']: cat_sums['교통비'] += amt
+                    elif c_name in ['운반비', '기타']: cat_sums['기타'] += amt
+                    elif c_name in cat_sums: cat_sums[c_name] += amt
+                    else: cat_sums['기타'] += amt
+            except: pass
+            
+            for c_idx, cat_name in enumerate(display_categories, 6):
+                v_cell = ws1.cell(row=r_idx, column=c_idx)
+                v_cell.value = cat_sums[cat_name] if cat_sums[cat_name] > 0 else ""
+                v_cell.number_format = '#,##0'; v_cell.alignment = align_right
+                
+            ws1.cell(row=r_idx, column=12, value=trip.get('user', '')).alignment = align_center
+            
+            for c in range(1, len(headers1)+1):
+                cell = ws1.cell(row=r_idx, column=c)
+                if c != 5: cell.font = font_main
+                cell.border = thin_border
+                
+            ws1.row_dimensions[r_idx].height = 25
+            r_idx += 1
+
+        sum_row_idx = r_idx
+        ws1.merge_cells(start_row=sum_row_idx, start_column=1, end_row=sum_row_idx, end_column=4)
+        ws1.cell(row=sum_row_idx, column=1, value="합   계").font = font_sum
+        ws1.cell(row=sum_row_idx, column=1).alignment = align_center
+        
+        for c in range(1, len(headers1)+1):
+            ws1.cell(row=sum_row_idx, column=c).border = thin_border
+            ws1.cell(row=sum_row_idx, column=c).fill = fill_sum
+        
+        for c in range(5, 12):
+            col_letter = get_column_letter(c)
+            sum_cell = ws1.cell(row=sum_row_idx, column=c, value=f"=SUM({col_letter}6:{col_letter}{sum_row_idx-1})")
+            sum_cell.font = font_sum; sum_cell.number_format = '#,##0'; sum_cell.alignment = align_right
+            
+        ws1.row_dimensions[sum_row_idx].height = 25
+
+        team_budget = TEAM_BUDGETS.get(display_team_title, 0) if target_team != 'ALL' else 0
+        total_expense = sum(safe_int(t.get('total_amount', 0)) for t in raw_data)
+        
+        r_idx += 2
+        
+        ws1.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=12)
+        summary_cell = ws1.cell(row=r_idx, column=1)
+        
+        if team_budget > 0:
+            balance = team_budget - total_expense
+            summary_cell.value = f"가지급금액(이월잔액포함) [ {team_budget:,.0f} ]   -   총경비사용금액 [ {total_expense:,.0f} ]   =   잔액 [ {balance:,.0f} ]"
+        else:
+            summary_cell.value = f"전체 통합 경비 합계액 [ {total_expense:,.0f} ] 원"
+            
+        summary_cell.font = Font(name='맑은 고딕', size=12, bold=True, color='000000')
+        summary_cell.alignment = align_center
+        ws1.row_dimensions[r_idx].height = 35
+
+        widths1 = {1: 4.5, 2: 4.5, 3: 45, 4: 9, 5: 11, 6: 10, 7: 10, 8: 10, 9: 10, 10: 10, 11: 10, 12: 9} 
+        for col_idx, w in widths1.items():
+            ws1.column_dimensions[get_column_letter(col_idx)].width = w
+
+        ws2 = wb.create_sheet(title="상세내역")
+        ws2.page_setup.fitToPage = True
+        ws2.page_setup.fitToWidth = 1
+        ws2.page_setup.fitToHeight = 0
+        
+        ws2.merge_cells('A1:C2')
+        ws2['A1'] = "지출 항목별 상세 증빙내역"
+        ws2['A1'].font = Font(name='맑은 고딕', size=14, bold=True, color='374151')
+        ws2['A1'].alignment = Alignment(horizontal='left', vertical='center')
+        
+        headers2 = ["순번", "사용일자", "부서명", "사용자", "경비구분", "지출 내용 및 세부 목적", "출장지", "사용 금액", "비고"]
+        for col_idx, h in enumerate(headers2, 1):
+            cell = ws2.cell(row=4, column=col_idx, value=h)
+            cell.font = font_header; cell.alignment = align_center; cell.border = thin_border
+            
+        d_idx = 5
+        detail_count = 1
+        for trip in raw_data:
+            try:
+                details = json.loads(trip.get('details_json', '[]'))
+                for item in details:
+                    ws2.cell(row=d_idx, column=1, value=detail_count).alignment = align_center
+                    ws2.cell(row=d_idx, column=2, value=str(trip.get('date', ''))[5:]).alignment = align_center
+                    ws2.cell(row=d_idx, column=3, value=trip.get('team', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=4, value=trip.get('user', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=5, value=item.get('category', '')).alignment = align_center
+                    ws2.cell(row=d_idx, column=6, value=trip.get('content', '')).alignment = align_left
+                    ws2.cell(row=d_idx, column=7, value=trip.get('place', '')).alignment = align_center
+                    
+                    amt_cell = ws2.cell(row=d_idx, column=8, value=safe_int(item.get('amount', 0)))
+                    amt_cell.number_format = '#,##0'; amt_cell.alignment = align_right
+                    ws2.cell(row=d_idx, column=9, value="확인완료").alignment = align_center
+                    
+                    for c in range(1, 10):
+                        cell = ws2.cell(row=d_idx, column=c)
+                        cell.border = thin_border; cell.font = font_main
+                    d_idx += 1; detail_count += 1
+            except: pass
+
+        widths2 = [5, 11, 12, 10, 12, 35, 15, 14, 12]
+        
+        for i, w in enumerate(widths2, 1):
+            ws2.column_dimensions[get_column_letter(i)].width = w
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"정산서_{target_team}_{target_month}.xlsx"
+        return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
+    except Exception as e:
+        print("엑셀 다운로드 중 에러 발생:", e)
+        return f"<script>alert('엑셀 파일 생성 중 오류가 발생했습니다: {str(e)}'); history.back();</script>"
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
